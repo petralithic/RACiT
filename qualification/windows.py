@@ -114,6 +114,7 @@ def shaders(sdk, out):
     # Match windows/CMakeLists.txt and drive the actual runtime compiler API.
     cmake = f'''cmake_minimum_required(VERSION 3.22)
 project(water_shader_check C CXX)
+set(CMAKE_NINJA_FORCE_RESPONSE_FILE ON CACHE BOOL "" FORCE)
 set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
 set(ENABLE_HLSL ON CACHE BOOL "" FORCE)
 set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
@@ -208,7 +209,10 @@ if __name__ == '__main__':
     variant(sdl_source / 'include', SDL / 'SDL2', set())
     VULKAN = fetch('vulkan', 'https://github.com/KhronosGroup/Vulkan-Headers.git', 'c46850864f4661461b0f6cb9922c058ffea4915e')
     failed = []
-    for name, sha in HEADS.items():
+    selected = sys.argv[1:] or list(HEADS)
+    assert all(name in HEADS for name in selected), 'Unknown contribution selection.'
+    for name in selected:
+        sha = HEADS[name]
         try:
             check(name, sha)
         except (AssertionError, OSError, ValueError, subprocess.SubprocessError) as error:

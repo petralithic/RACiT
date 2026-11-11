@@ -27,5 +27,5 @@ jobs:
       - name: Check exact contribution heads
         shell: pwsh
         run: |
-          python qualification/windows.py
+          python qualification/windows.py water
           exit $LASTEXITCODE
