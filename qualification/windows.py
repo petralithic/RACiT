@@ -13,7 +13,7 @@ HEADS = {
     'stack': '34b12ccf8590872164e1e56a225db8e056890ead',
     'graphs': 'dd16ee805b0ec7d409ee6dd2468756ad8e91520d',
     'input': 'e3919cd1ef68d7c69fbb9f35f9fa9291648fba91',
-    'water': '2703fc819defd88d3109ee2c9ff7191e4e7549ab',
+    'water': 'a1064f3adf45a702b2bcda8d40ca32f4d87acb4b',
 }
 REPO = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ['RUNNER_TEMP']) / 'racit-components'
@@ -184,10 +184,11 @@ def check(name, sha):
         summary(name, 'PASS actual pad/UI/prompt objects, mouse components and synthetic-atlas apply/restore checks.')
     elif name == 'water':
         if not SHADER_ONLY:
-            for file in ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']:
+            files = ['rsx_draw_engine.c'] if INTERFACE_ONLY else ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']
+            for file in files:
                 object_file(sdk, sdk / 'libs/video' / file, out / (file + '.o'))
         engine = (sdk / 'libs/video/rsx_draw_engine.c').read_text(encoding='utf-8')
-        if not SHADER_ONLY:
+        if not SHADER_ONLY and not INTERFACE_ONLY:
             test = (fixture / 'remap.c').read_text(encoding='utf-8').replace('/* ACTUAL_SIGNED_MASK */', function(engine, 'static u64 eng_signed_mask(void)'))
             (out / 'remap.c').write_text(test, encoding='utf-8')
             executable(sdk, 'remap', out, out / 'remap.c', sdk / 'libs/video/rsx_texture_layout.c')
@@ -195,7 +196,10 @@ def check(name, sha):
         end = engine.index('\n\n/*', start)
         (out / 'depth_shaders.h').write_text(engine[start:end], encoding='utf-8')
         shaders(sdk, out)
-        summary(name, 'PASS exact depth shader compilation and entrypoint interface matching through actual runtime translator/pinned Windows glslang. Object/remap checks retain their preceding recorded run.' if SHADER_ONLY else 'PASS actual engine/FP objects, 192 remap cases, exact depth shader compilation and entrypoint interface matching.')
+        if INTERFACE_ONLY:
+            summary(name, 'PASS actual changed engine object and exact depth shader entrypoint interface matching. Unchanged FP/remap sources retain preceding checks.')
+        else:
+            summary(name, 'PASS exact depth shader compilation and entrypoint interface matching through actual runtime translator/pinned Windows glslang. Object/remap checks retain their preceding recorded run.' if SHADER_ONLY else 'PASS actual engine/FP objects, 192 remap cases, exact depth shader compilation and entrypoint interface matching.')
 
 
 if __name__ == '__main__':
@@ -212,7 +216,8 @@ if __name__ == '__main__':
     VULKAN = fetch('vulkan', 'https://github.com/KhronosGroup/Vulkan-Headers.git', 'c46850864f4661461b0f6cb9922c058ffea4915e')
     failed = []
     SHADER_ONLY = sys.argv[1:] == ['water-shaders']
-    selected = ['water'] if SHADER_ONLY else sys.argv[1:] or list(HEADS)
+    INTERFACE_ONLY = sys.argv[1:] == ['water-interface']
+    selected = ['water'] if SHADER_ONLY or INTERFACE_ONLY else sys.argv[1:] or list(HEADS)
     assert all(name in HEADS for name in selected), 'Unknown contribution selection.'
     for name in selected:
         sha = HEADS[name]
