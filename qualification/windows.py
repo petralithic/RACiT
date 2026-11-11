@@ -14,6 +14,7 @@ HEADS = {
     'graphs': 'dd16ee805b0ec7d409ee6dd2468756ad8e91520d',
     'input': 'e3919cd1ef68d7c69fbb9f35f9fa9291648fba91',
     'water': 'a1064f3adf45a702b2bcda8d40ca32f4d87acb4b',
+    'audio': '33575ba13b7d22ec17119dec58446816316e9389',
 }
 REPO = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ['RUNNER_TEMP']) / 'racit-components'
@@ -182,6 +183,12 @@ def check(name, sha):
         (out / 'dxt_helpers.h').write_text(codec, encoding='utf-8')
         executable(sdk, 'atlas', out, fixture / 'atlas.cpp', extra=['-I', out, '-I', source / 'game'])
         summary(name, 'PASS actual pad/UI/prompt objects, mouse components and synthetic-atlas apply/restore checks.')
+    elif name == 'audio':
+        audio = sdk / 'libs/audio/cellAudio.c'
+        object_file(sdk, audio, out / 'audio-wasapi.o')
+        run(*compiler(sdk), '-DPS3RECOMP_AUDIO_USE_SDL2=1',
+            '-c', audio, '-o', out / 'audio-sdl.o')
+        summary(name, 'PASS exact cellAudio C objects for Windows default WASAPI and SDL2 selections. Linking, audio-device output and gameplay remain unverified by this component check.')
     elif name == 'water':
         if not SHADER_ONLY:
             files = ['rsx_draw_engine.c'] if INTERFACE_ONLY else ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']
