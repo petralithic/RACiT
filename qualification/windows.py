@@ -183,17 +183,19 @@ def check(name, sha):
         executable(sdk, 'atlas', out, fixture / 'atlas.cpp', extra=['-I', out, '-I', source / 'game'])
         summary(name, 'PASS actual pad/UI/prompt objects, mouse components and synthetic-atlas apply/restore checks.')
     elif name == 'water':
-        for file in ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']:
-            object_file(sdk, sdk / 'libs/video' / file, out / (file + '.o'))
+        if not SHADER_ONLY:
+            for file in ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']:
+                object_file(sdk, sdk / 'libs/video' / file, out / (file + '.o'))
         engine = (sdk / 'libs/video/rsx_draw_engine.c').read_text(encoding='utf-8')
-        test = (fixture / 'remap.c').read_text(encoding='utf-8').replace('/* ACTUAL_SIGNED_MASK */', function(engine, 'static u64 eng_signed_mask(void)'))
-        (out / 'remap.c').write_text(test, encoding='utf-8')
-        executable(sdk, 'remap', out, out / 'remap.c', sdk / 'libs/video/rsx_texture_layout.c')
+        if not SHADER_ONLY:
+            test = (fixture / 'remap.c').read_text(encoding='utf-8').replace('/* ACTUAL_SIGNED_MASK */', function(engine, 'static u64 eng_signed_mask(void)'))
+            (out / 'remap.c').write_text(test, encoding='utf-8')
+            executable(sdk, 'remap', out, out / 'remap.c', sdk / 'libs/video/rsx_texture_layout.c')
         start = engine.index('static const char* const kEngDepthAsColorVS =')
         end = engine.index('\n\n/*', start)
         (out / 'depth_shaders.h').write_text(engine[start:end], encoding='utf-8')
         shaders(sdk, out)
-        summary(name, 'PASS actual engine/FP objects, 192 remap cases and exact depth shaders through actual runtime translator/pinned Windows glslang; vertex ATTR0 interface checked.')
+        summary(name, 'PASS exact depth shader compilation and entrypoint interface matching through actual runtime translator/pinned Windows glslang. Object/remap checks retain their preceding recorded run.' if SHADER_ONLY else 'PASS actual engine/FP objects, 192 remap cases, exact depth shader compilation and entrypoint interface matching.')
 
 
 if __name__ == '__main__':
@@ -209,7 +211,8 @@ if __name__ == '__main__':
     variant(sdl_source / 'include', SDL / 'SDL2', set())
     VULKAN = fetch('vulkan', 'https://github.com/KhronosGroup/Vulkan-Headers.git', 'c46850864f4661461b0f6cb9922c058ffea4915e')
     failed = []
-    selected = sys.argv[1:] or list(HEADS)
+    SHADER_ONLY = sys.argv[1:] == ['water-shaders']
+    selected = ['water'] if SHADER_ONLY else sys.argv[1:] or list(HEADS)
     assert all(name in HEADS for name in selected), 'Unknown contribution selection.'
     for name in selected:
         sha = HEADS[name]
