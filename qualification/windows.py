@@ -9,6 +9,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
+    'menu': 'd1d7aa6c80d1fcc42831a7fc143ef7db65ee767b',
     'profiles': '54b65dcc71c9dca0e349a959a76a45784ad17839',
     'stack': '34b12ccf8590872164e1e56a225db8e056890ead',
     'graphs': 'dd16ee805b0ec7d409ee6dd2468756ad8e91520d',
@@ -165,7 +166,30 @@ def check(name, sha):
     out = ROOT / (name + '-out')
     out.mkdir()
     fixture = REPO / 'qualification'
-    if name == 'stack':
+    if name == 'menu':
+        # Match scripts/setup_windows.sh's existing official zlib pin.
+        zlib = fetch('zlib', 'https://github.com/madler/zlib.git',
+                     '767c4c947852e143f582c85f14cf573411df1b35')
+        hooks = ['libs/filesystem/cellFs.c', 'runtime/ppu/ppu_fs.cpp',
+                 'runtime/syscalls/sys_fs.c']
+        predicates = []
+        for index, file in enumerate(hooks):
+            source_file = sdk / file
+            command = compiler(sdk, cpp=file.endswith('.cpp'))
+            run(*command, '-I', zlib, '-c', source_file,
+                '-o', out / (Path(file).stem + '.o'))
+            text = source_file.read_text(encoding='utf-8')
+            assert text.count('racit_menu_archive_path(') == 2
+            call = text[text.index('racit_menu_archive_path(', text.index('racit_menu_archive_path(') + 1):]
+            expression = call[call.index('\n') + 1:call.index(');')].strip()
+            predicates.append(f'static bool readonly_{index}(unsigned flags) {{ return {expression}; }}')
+        (out / 'readonly.h').write_text('\n'.join(predicates), encoding='utf-8')
+        executable(sdk, 'menu', out, fixture / 'menu.cpp', source / 'game/menu_archive.cpp',
+                   extra=['-I', source / 'game', '-I', out])
+        for file in ['scripts/prepare_menu_keycaps.py', 'scripts/patch_lift.py']:
+            run(sys.executable, '-m', 'py_compile', source / file)
+        summary(name, 'PASS actual Windows archive selector and menu publication components, protected receiver rejection, context/continuation restoration, three filesystem-hook objects and Python syntax. Scaleform execution and Windows gameplay remain outside this source-only run.')
+    elif name == 'stack':
         executable(sdk, 'stack', out, fixture / 'stack.cpp')
         summary(name, 'PASS actual Windows valid/protected/cross-page/overflow reads. Generated PPU caller is outside this source-only compile.')
     elif name == 'graphs':

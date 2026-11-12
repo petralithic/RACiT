@@ -1,0 +1,9 @@
+# Windows menu qualification handoff
+
+The owning local worktree is `upstream-work/windows-menu2106`, branch `ci/windows-menu-qualification`. The feature input is exact commit `d1d7aa6c80d1fcc42831a7fc143ef7db65ee767b`. The CI commit has the preceding qualification head and that feature commit as parents, preserving the existing CI tree plus its focused extension. The original dependency worktree and its index are untouched.
+
+The workflow uses one standard `windows-2022` job with a 30-minute timeout and serial component commands. It invokes `python qualification/windows.py menu`. Existing pinned dependencies and bounded Git fetch retries are reused. Zlib headers come from official `madler/zlib` commit `767c4c947852e143f582c85f14cf573411df1b35`, matching `scripts/setup_windows.sh` in the proposed feature source. There is no glslang build, artifact upload or cache upload.
+
+Changed source surfaces checked are `game/menu_archive.cpp`, `game/menu_keycaps.h`, `libs/filesystem/cellFs.c`, `runtime/ppu/ppu_fs.cpp` and `runtime/syscalls/sys_fs.c`, after applying the exact feature's runtime patch to SDK `5244db92669b54831c6d3ebb7a96d58c4dbfa6df`. The fixture includes actual SDK context and VM headers. Only the guest assignment bridge and backing VM writes are component fixtures. Read-only predicates are extracted from the actual three patched calls. The protected receiver uses Windows memory protection. Two modified Python files receive syntax checks. No proprietary assets are used.
+
+No local native build, CI push, dispatch, PR submission or browser runtime was started. Review and run remain with the parent owner. A passing hosted run will establish these source components only. Actual Windows game linking, Scaleform execution and visible keyboard menu behavior remain unverified. All job-generated staging is finite runner scratch. This preparation created no local build artifacts or resident processes. [Owner-facing progress](PROGRESS.md).

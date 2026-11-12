@@ -1,15 +1,15 @@
-name: Windows contribution checks
+name: Windows menu contribution checks
 on:
   push:
-    branches: [ci/windows-qualification]
+    branches: [ci/windows-menu-qualification]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: windows-contribution-qualification
+  group: windows-menu-qualification
   cancel-in-progress: false
 jobs:
-  components:
+  menu:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
@@ -27,5 +27,5 @@ jobs:
       - name: Check exact contribution heads
         shell: pwsh
         run: |
-          python qualification/windows.py water-interface
+          python qualification/windows.py menu
           exit $LASTEXITCODE
