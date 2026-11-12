@@ -23,6 +23,12 @@ agentq run --project "$P" --session 01a15473-3898-77f0-be69-faef100bf5c5 -- cmak
 agentq run --project "$P" --session 01a15473-3898-77f0-be69-faef100bf5c5 -- cmake --build "$S/upstream-update2021/source/out/BCUS98124-1.20/build" --parallel 2
 ```
 
-The existing CMake cache source directories and SDK links were inspected. Generation and the earlier shader/object checks can retain their prior evidence. At preparation time, these Mac backend builds and the fixed-head Windows backend compilation remain pending. The root agent owns their actual execution, output hashes, resulting SDK checkpoints and publication decision.
+The existing CMake cache source directories and SDK links were inspected. Generation and the earlier shader/object checks retain their prior evidence. Root subsequently applied the exact include movement to the private Mac SDK and update export, verified both backend blobs equal `e000e2826d594b223c0203b533256efafbbc6fe7`, and completed both normal cached CMake builds successfully in session `72598`. Build logs are retained under `upstream-stdio2125` in the session scratch. The private Mac SDK checkpoint is `6987d1d` on `checkpoint/macos-vulkan-stdio2125`.
+
+The update cache matches the previously qualified `7272abb` implementation plus this include correction, providing a native compile/link result for that source change. The Mac cache contains the menu integration from `d1d7aa6` plus this correction. Its successful backend compile/link checks the fixed source in that integration. It supplies no complete build result for the standalone public Mac child `0a3a13e`, whose other feature content differs from the integration.
+
+Windows run [43174927407](https://github.com/petralithic/RACiT/actions/runs/43174927407) passed on CI head `cf788c4`, checking the exact update source child `21911c8`. This compiles the actual patched Vulkan backend/queue C object for Windows SDL2 selection. Full Windows update generation, game linking, driver execution and gameplay remain outside that check.
+
+The include-fix children have no new gameplay replay. Previously observed scenes retain their original source and scene scope. A complete standalone Mac-child build remains pending. Root has kept the current eight review forms and public feature heads unchanged. The source fixes remain local review/qualification branches for a follow-up publication decision, and this private note stays separate from both source-only review heads.
 
 All temporary SDK reconstruction files from preparing the source fixes were removed. Existing qualification checkouts, build objects and original dependency indices were preserved by the preparation work.
