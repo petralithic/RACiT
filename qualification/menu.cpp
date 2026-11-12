@@ -8,10 +8,14 @@
 #include <string>
 #include "ppu_context.h"
 #include "../memory/vm.h"
-#include "cellFs.h"
 
 extern "C" void vm_write32(uint64_t address, uint32_t value);
 #include "menu_keycaps.h"
+struct ReadOnlyHook {
+    bool (*accepts)(unsigned);
+    unsigned read;
+    unsigned writes[4];
+};
 #include "readonly.h"
 
 uint8_t* vm_base;
@@ -55,16 +59,15 @@ int main()
     { std::ofstream file(archive, std::ios::binary); file.write(reinterpret_cast<char*>(header), sizeof header); }
     assert(_putenv_s("RACACIT_MENU_ARCHIVE", archive.string().c_str()) == 0);
     assert(racit_menu_archive_init());
-    for (auto predicate : {readonly_0, readonly_1, readonly_2}) {
+    for (const ReadOnlyHook& hook : readonly_hooks) {
         char path[2048] = "Z:\\PACKED\\GAME\\GLOBAL_CACHED.PSARC";
-        assert(predicate(CELL_FS_O_RDONLY));
-        racit_menu_archive_path(path, sizeof path, predicate(CELL_FS_O_RDONLY));
+        assert(hook.accepts(hook.read));
+        racit_menu_archive_path(path, sizeof path, hook.accepts(hook.read));
         assert(path == std::filesystem::canonical(archive).string());
-        for (unsigned flags : {unsigned(CELL_FS_O_WRONLY), unsigned(CELL_FS_O_CREAT),
-                               unsigned(CELL_FS_O_TRUNC), unsigned(CELL_FS_O_APPEND)}) {
+        for (unsigned flags : hook.writes) {
             strcpy(path, "Z:\\packed\\game\\global_cached.psarc");
-            assert(!predicate(flags));
-            racit_menu_archive_path(path, sizeof path, predicate(flags));
+            assert(!hook.accepts(flags));
+            racit_menu_archive_path(path, sizeof path, hook.accepts(flags));
             assert(!strcmp(path, "Z:\\packed\\game\\global_cached.psarc"));
         }
     }

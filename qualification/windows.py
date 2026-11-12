@@ -1,6 +1,7 @@
 """Source-only checks of immutable contribution heads on a Windows runner."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -172,17 +173,28 @@ def check(name, sha):
                      '767c4c947852e143f582c85f14cf573411df1b35')
         hooks = ['libs/filesystem/cellFs.c', 'runtime/ppu/ppu_fs.cpp',
                  'runtime/syscalls/sys_fs.c']
+        headers = ['libs/filesystem/cellFs.h', None, 'runtime/syscalls/sys_fs.h']
         predicates = []
+        cases = []
+        # This adapter uses the public SDK context, without generated game code.
+        (out / 'ppu_recomp.h').write_text('#include "ppu_context.h"\n', encoding='utf-8')
         for index, file in enumerate(hooks):
             source_file = sdk / file
             command = compiler(sdk, cpp=file.endswith('.cpp'))
-            run(*command, '-I', zlib, '-c', source_file,
+            run(*command, '-I', zlib, '-I', out, '-c', source_file,
                 '-o', out / (Path(file).stem + '.o'))
             text = source_file.read_text(encoding='utf-8')
             assert text.count('racit_menu_archive_path(') == 2
             call = text[text.index('racit_menu_archive_path(', text.index('racit_menu_archive_path(') + 1):]
             expression = call[call.index('\n') + 1:call.index(');')].strip()
+            definitions = (sdk / headers[index]).read_text(encoding='utf-8') if headers[index] else ''
+            definitions += '\n' + text
+            flags = dict(re.findall(r'^#define\s+(CELL_FS_O_\w+)\s+(\S+)', definitions, re.MULTILINE))
+            expression = re.sub(r'CELL_FS_O_\w+', lambda match: flags[match.group()], expression)
             predicates.append(f'static bool readonly_{index}(unsigned flags) {{ return {expression}; }}')
+            mode = [flags['CELL_FS_O_' + name] for name in ['RDONLY', 'WRONLY', 'CREAT', 'TRUNC', 'APPEND']]
+            cases.append(f'{{readonly_{index}, {mode[0]}, {{{", ".join(mode[1:])}}}}}')
+        predicates.append('static const ReadOnlyHook readonly_hooks[] = {' + ',\n'.join(cases) + '};')
         (out / 'readonly.h').write_text('\n'.join(predicates), encoding='utf-8')
         executable(sdk, 'menu', out, fixture / 'menu.cpp', source / 'game/menu_archive.cpp',
                    extra=['-I', source / 'game', '-I', out])
