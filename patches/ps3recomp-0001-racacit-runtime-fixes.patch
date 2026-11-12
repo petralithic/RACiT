@@ -19548,7 +19548,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b7..8597fa2 100644
+index e2687b7..e26a071 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -19566,7 +19566,7 @@ index e2687b7..8597fa2 100644
  
  #include "rsx_vulkan_backend.h"
  #include "rsx_vertex_fetch.h"
-@@ -52,13 +55,41 @@
+@@ -52,16 +55,44 @@
  #include "rsx_draw_engine.h"
  #include "vulkan/rsx_vk_fallback_vert.spv.h"
  #include "vulkan/rsx_vk_fallback_frag.spv.h"
@@ -19575,6 +19575,7 @@ index e2687b7..8597fa2 100644
 +#include "../input/touch_controls.h"
 +#include "rsx_host_ui.h"
 +#include <math.h>
++#include <stdio.h>
 +
 +/* register(t48) -> the cube-array binding (see rsx_fp_cube_array_style). */
 +#define VK_CUBE_BINDING (RSX_SPIRV_TEXTURE_BINDING + 48u)
@@ -19608,7 +19609,10 @@ index e2687b7..8597fa2 100644
 +#endif
  #include <stddef.h>
  #include <stdint.h>
- #include <stdio.h>
+-#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
 @@ -89,22 +120,24 @@
      X(vkCreateShaderModule) X(vkDestroyShaderModule) \
      X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
