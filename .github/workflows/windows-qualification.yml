@@ -1,15 +1,21 @@
-name: Windows menu contribution checks
+name: Windows menu and update component checks
 on:
   push:
     branches: [ci/windows-menu-qualification]
   workflow_dispatch:
+    inputs:
+      contribution:
+        description: Focused component selection
+        type: choice
+        options: [update, menu]
+        default: update
 permissions:
   contents: read
 concurrency:
   group: windows-menu-qualification
   cancel-in-progress: false
 jobs:
-  menu:
+  components:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
@@ -26,6 +32,8 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: --retries 3 --timeout 60 -r qualification/requirements-windows.txt
       - name: Check exact contribution heads
         shell: pwsh
+        env:
+          CONTRIBUTION: ${{ inputs.contribution || 'update' }}
         run: |
-          python qualification/windows.py menu
+          python qualification/windows.py $env:CONTRIBUTION
           exit $LASTEXITCODE

@@ -10,6 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
+    'update': '7272abb489b8429451b4554f9ead9d647ef771ee',
     'menu': 'd1d7aa6c80d1fcc42831a7fc143ef7db65ee767b',
     'profiles': '54b65dcc71c9dca0e349a959a76a45784ad17839',
     'stack': '34b12ccf8590872164e1e56a225db8e056890ead',
@@ -218,6 +219,11 @@ def check(name, sha):
         (out / 'dxt_helpers.h').write_text(codec, encoding='utf-8')
         executable(sdk, 'atlas', out, fixture / 'atlas.cpp', extra=['-I', out, '-I', source / 'game'])
         summary(name, 'PASS actual pad/UI/prompt objects, mouse components and synthetic-atlas apply/restore checks.')
+    elif name == 'update':
+        run(*compiler(sdk), '-DPS3RECOMP_WIN_USE_SDL2=1',
+            '-c', sdk / 'libs/video/rsx_vulkan_backend.c',
+            '-o', out / 'rsx_vulkan_backend.o')
+        summary(name, 'PASS exact update SDK Vulkan backend/queue C object for Windows SDL2 selection. Full update generation, game linking, driver execution and gameplay remain outside this source-only check.')
     elif name == 'water':
         if not SHADER_ONLY:
             files = ['rsx_draw_engine.c'] if INTERFACE_ONLY else ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']
