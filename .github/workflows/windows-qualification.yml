@@ -1,18 +1,18 @@
-name: Windows menu and update component checks
+name: Windows Vulkan race component check
 on:
   push:
-    branches: [ci/windows-menu-qualification]
+    branches: [ci/windows-vulkan-race]
   workflow_dispatch:
     inputs:
       contribution:
         description: Focused component selection
         type: choice
-        options: [update, menu]
-        default: update
+        options: [vulkan-race]
+        default: vulkan-race
 permissions:
   contents: read
 concurrency:
-  group: windows-menu-qualification
+  group: windows-vulkan-race
   cancel-in-progress: false
 jobs:
   components:
@@ -33,7 +33,7 @@ jobs:
       - name: Check exact contribution heads
         shell: pwsh
         env:
-          CONTRIBUTION: ${{ inputs.contribution || 'update' }}
+          CONTRIBUTION: ${{ inputs.contribution || 'vulkan-race' }}
         run: |
           python qualification/windows.py $env:CONTRIBUTION
           exit $LASTEXITCODE
