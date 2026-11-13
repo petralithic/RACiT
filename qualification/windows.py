@@ -10,7 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
-    'vulkan-race': '121a94366a91d8286a27bf282c6b6271903341a5',
+    'vulkan-race': 'b0732229cfc7c854868be303358b761e28007a63',
     'update': '21911c8ff61425d67dbfe53acebbca9fe5b3bb1e',
     'menu': 'd1d7aa6c80d1fcc42831a7fc143ef7db65ee767b',
     'profiles': '54b65dcc71c9dca0e349a959a76a45784ad17839',
@@ -224,7 +224,12 @@ def check(name, sha):
         run(*compiler(sdk), '-DPS3RECOMP_WIN_USE_SDL2=1',
             '-c', sdk / 'libs/video/rsx_vulkan_backend.c',
             '-o', out / 'rsx_vulkan_backend.o')
-        summary(name, 'PASS exact SDK Vulkan backend/queue C object for Windows SDL2 selection. Full game generation, linking, driver execution and gameplay remain outside this source-only check.')
+        audio = sdk / 'libs/audio/cellAudio.c'
+        object_file(sdk, audio, out / 'audio-wasapi.o')
+        run(*compiler(sdk), '-DPS3RECOMP_WIN_USE_SDL2=1',
+            '-c', audio, '-o', out / 'audio-sdl.o')
+        object_file(sdk, sdk / 'libs/video/rsx_draw_engine.c', out / 'draw-engine.o')
+        summary(name, 'PASS Windows Vulkan backend, draw engine, and audio objects with WASAPI and SDL2.')
     elif name == 'water':
         if not SHADER_ONLY:
             files = ['rsx_draw_engine.c'] if INTERFACE_ONLY else ['rsx_draw_engine.c', 'rsx_fp_decompiler.c']
