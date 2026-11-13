@@ -224,7 +224,8 @@ def check(name, sha):
     elif name == 'archive-worker':
         zlib = fetch('archive-zlib', 'https://github.com/madler/zlib.git',
                      '767c4c947852e143f582c85f14cf573411df1b35')
-        run(*compiler(sdk), '-I', zlib, '-c', sdk / 'libs/spurs/cellSpurs.c',
+        run(*compiler(sdk), '-I', sdk / 'runtime/spu', '-I', zlib,
+            '-c', sdk / 'libs/spurs/cellSpurs.c',
             '-o', out / 'cellSpurs.o')
         summary(name, 'PASS exact patched SPURS object for Windows x86_64. Game linking and gameplay are outside this check.')
     elif name in ('update', 'vulkan-race'):
