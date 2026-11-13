@@ -5330,7 +5330,7 @@ index e9cf770..934b066 100644
  #if defined(__APPLE__)
  /* getcontext() points uc_mcontext at ucontext_t's own __mcontext_data member
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
-index 688ff04..7382093 100644
+index 688ff04..5220623 100644
 --- a/libs/spurs/cellSpurs.c
 +++ b/libs/spurs/cellSpurs.c
 @@ -15,6 +15,7 @@
@@ -5921,14 +5921,14 @@ index 688ff04..7382093 100644
          printf("[cellSpurs] _LFQueueInitialize(owner=0x%08X q=0x%08X buf=0x%08X size=%u depth=%u dir=%u) -> BE line written\n",
                 (u32)owner_ea, (u32)queue_ea, (u32)buffer_ea, size, depth, direction);
      return CELL_OK;
-@@ -3244,6 +3500,261 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
+@@ -3244,6 +3500,274 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
  s32 cellSpursLFQueueAttachLv2EventQueue(u64 queue_ea)
  {
      static int _n = 0;
 -    if (_n++ < 8) printf("[cellSpurs] LFQueueAttachLv2EventQueue(q=0x%08X)\n", (u32)queue_ea);
 +    if ((_n < 8 && (_n++, 1))) printf("[cellSpurs] LFQueueAttachLv2EventQueue(q=0x%08X)\n", (u32)queue_ea);
-     return CELL_OK;
- }
++    return CELL_OK;
++}
 +
 +/* PORT PATCH (racacit): the three cellSpurs imports A Crack in Time had
 + * unresolved. PushBody starts as a logging probe (RACACIT_LFQ_TRACE) so the
@@ -5936,8 +5936,8 @@ index 688ff04..7382093 100644
 +s32 cellSpursLFQueueDetachLv2EventQueue(u64 queue_ea)
 +{
 +    (void)queue_ea;
-+    return CELL_OK;
-+}
+     return CELL_OK;
+ }
 +
 +s32 cellSpursSetGlobalExceptionEventHandler(u64 spurs_ea, u64 handler_ea, u64 arg_ea)
 +{
@@ -6169,14 +6169,27 @@ index 688ff04..7382093 100644
 +                        n, "waited for the RSX", (long)p, (long)n_vram, (long)n_late, 10);
 +        }
 +    }
-+    static int sync = -1;
-+    if (sync < 0) sync = getenv("RACACIT_LFQ_ASYNC") ? 0 : 1;   /* inline (default) or the worker */
-+    if (sync) { ez_process(j); free(j); return CELL_OK; }
-+    if (!s_ez_started && InterlockedCompareExchange(&s_ez_started, 1, 0) == 0) {
-+        HANDLE t = CreateThread(NULL, 0, ez_worker, NULL, 0, NULL);
-+        if (t) CloseHandle(t);
++    static volatile LONG mode; /* 0: uninitialized, 1: inline, 2: worker */
++    LONG selected = InterlockedCompareExchange(&mode, 0, 0);
++    if (!selected) {
++        const LONG requested = getenv("RACACIT_LFQ_ASYNC") ? 2 : 1;
++        selected = InterlockedCompareExchange(&mode, requested, 0);
++        if (!selected) selected = requested;
 +    }
++    if (selected == 1) { ez_process(j); free(j); return CELL_OK; }
 +    AcquireSRWLockExclusive(&s_ezq_lock);
++    if (!s_ez_started) {
++        HANDLE worker = CreateThread(NULL, 0, ez_worker, NULL, 0, NULL);
++        if (!worker) {
++            /* Finish this request before another producer can start the worker. */
++            ez_process(j);
++            free(j);
++            ReleaseSRWLockExclusive(&s_ezq_lock);
++            return CELL_OK;
++        }
++        s_ez_started = 1;
++        CloseHandle(worker);
++    }
 +    if (s_ez_last) s_ez_last->next = j; else s_ez_first = j;
 +    s_ez_last = j;
 +    ReleaseSRWLockExclusive(&s_ezq_lock);
