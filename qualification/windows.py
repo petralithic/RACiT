@@ -11,12 +11,12 @@ SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
     'vulkan-race': 'b0732229cfc7c854868be303358b761e28007a63',
-    'update': '21911c8ff61425d67dbfe53acebbca9fe5b3bb1e',
-    'menu': 'd1d7aa6c80d1fcc42831a7fc143ef7db65ee767b',
+    'update': 'f599c60ab1c005a1e5b3fe313f21d0fd07f760e3',
+    'menu': '961bfedfd8fd830da60059139b4fe689792243f1',
     'profiles': '54b65dcc71c9dca0e349a959a76a45784ad17839',
     'stack': '34b12ccf8590872164e1e56a225db8e056890ead',
-    'graphs': 'dd16ee805b0ec7d409ee6dd2468756ad8e91520d',
-    'input': 'e3919cd1ef68d7c69fbb9f35f9fa9291648fba91',
+    'graphs': 'df5c64c10a1f935a86f6b253d6be5ac846338989',
+    'input': '16ba4938ef23e33ef0ee0732d676fcebfaeb7c92',
     'water': 'a1064f3adf45a702b2bcda8d40ca32f4d87acb4b',
 }
 REPO = Path(__file__).resolve().parent.parent

@@ -1,4 +1,4 @@
-name: Windows Vulkan race component check
+name: Windows merged contribution checks
 on:
   push:
     branches: [ci/windows-vulkan-race]
@@ -7,8 +7,8 @@ on:
       contribution:
         description: Focused component selection
         type: choice
-        options: [vulkan-race]
-        default: vulkan-race
+        options: [stacked, vulkan-race]
+        default: stacked
 permissions:
   contents: read
 concurrency:
@@ -33,7 +33,11 @@ jobs:
       - name: Check exact contribution heads
         shell: pwsh
         env:
-          CONTRIBUTION: ${{ inputs.contribution || 'vulkan-race' }}
+          CONTRIBUTION: ${{ inputs.contribution || 'stacked' }}
         run: |
-          python qualification/windows.py $env:CONTRIBUTION
+          if ($env:CONTRIBUTION -eq 'stacked') {
+            python qualification/windows.py update menu input graphs
+          } else {
+            python qualification/windows.py $env:CONTRIBUTION
+          }
           exit $LASTEXITCODE
