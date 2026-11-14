@@ -38,6 +38,26 @@ bash launcher/build.sh
 
 This gives you `game/build-win/game/RaCACiT.exe` and `launcher/build/RaCACiT Launcher.exe`.
 
+## Optional profile-specific output
+
+The default pipeline still writes metadata to `out/` and generated sources to
+`game/src/recomp`, `game/spu` and `game/prx`. Existing Windows build commands
+and tools that read those paths can continue using the default invocation.
+
+Set `RACACIT_PROFILE_OUTPUT=1` before running `scripts/pipeline.sh` to generate under
+`out/<profile>/`. The pipeline identifies the profile from the executable
+fingerprint, and publishes generated sources after the lift and patch passes
+succeed. The `recomp`, `spu` and `prx` directories in that profile are managed
+by the pipeline. Keep manually edited sources elsewhere.
+
+With `SKIP_DESKTOP=1`, configure a separate Windows build directory and add
+`-DRECOMP_DIR="$PWD/out/BCUS98124-1.00/recomp"`,
+`-DSPU_DIR="$PWD/out/BCUS98124-1.00/spu"` and
+`-DPRX_DIR="$PWD/out/BCUS98124-1.00/prx"` to the Windows CMake invocation.
+Standalone naming tools can read profile metadata by setting `RACACIT_OUT`
+to the profile directory, `RACACIT_ELF` to the source executable and
+`RACACIT_ELF_STEM` to its filename without the extension.
+
 ## Run your build
 
 Put the exe in a launcher's `builds\v<number>\` folder, next to a `version.txt` holding that
