@@ -10,7 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
-    'archive-worker': 'ed2f4c26b5a84417efbfd99e964f681038ca159b',
+    'archive-worker': '663c7889ebfeb4c29f9386396809f4c04f8401f5',
     'vulkan-race': '121a94366a91d8286a27bf282c6b6271903341a5',
     'update': '21911c8ff61425d67dbfe53acebbca9fe5b3bb1e',
     'menu': 'd1d7aa6c80d1fcc42831a7fc143ef7db65ee767b',
