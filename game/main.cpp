@@ -312,6 +312,17 @@ static void present_guest_frame(void)
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     InterlockedIncrement(&g_frames_presented);
+    /* Local measurement: guest frames per 2 s, with the slowest interval. */
+    { static unsigned long long t0, last, worst; static unsigned n;
+      const unsigned long long now = rt_now_us();
+      if (!t0) t0 = now;
+      if (last && now - last > worst) worst = now - last;
+      last = now; n++;
+      if (now - t0 >= 2000000ull) {
+          fprintf(stderr, "[fpsm] %.1f fps, worst %.1f ms over %u frames\n",
+                  n * 1e6 / (double)(now - t0), worst / 1000.0, n);
+          t0 = now; n = 0; worst = 0;
+      } }
 }
 
 /* The FIFO walker runs on frame_clock. A guest thread that has just moved
