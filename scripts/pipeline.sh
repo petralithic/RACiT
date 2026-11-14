@@ -51,13 +51,12 @@ fi
 
 echo "== 3/5 PPU lift"
 # names.json (name_pass.py) only adds comments above lifted functions.
-NAMES=()
-[ -f "$OUT/names.json" ] && NAMES=(--names "$OUT/names.json")
-PS3RECOMP_CHUNK_LINES=${PS3RECOMP_CHUNK_LINES:-100000} "${PY_COMMAND[@]}" "$PS3R/tools/ppu_lifter.py" "$ELF" \
-  --functions "$FUNCS" \
-  --hle-stubs "$OUT/$BASE.imports.json" \
-  "${NAMES[@]}" \
-  --output "$RECOMP"
+LIFT_ARGS=("$ELF" --functions "$FUNCS"
+           --hle-stubs "$OUT/$BASE.imports.json" --output "$RECOMP")
+if [ -f "$OUT/names.json" ]; then
+  LIFT_ARGS+=(--names "$OUT/names.json")
+fi
+PS3RECOMP_CHUNK_LINES=${PS3RECOMP_CHUNK_LINES:-100000} "${PY_COMMAND[@]}" "$PS3R/tools/ppu_lifter.py" "${LIFT_ARGS[@]}"
 
 "${PY_COMMAND[@]}" "$ROOT/scripts/patch_lift.py" "$RECOMP"
 
