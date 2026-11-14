@@ -53,12 +53,14 @@ def check_game_profile(elf, selected='auto'):
         sys.exit('Selected ' + selected + ' but the executable is ' + actual['id'] + '. Generation stopped.')
     if not actual['buildable']:
         sys.exit('Recognized ' + actual['id'] + ', but this source tree cannot build it: ' + actual['status'])
-    print('Game profile: ' + actual['id'] + ' (SHA-256 ' + checksum + ')')
+    return actual['id'], checksum
 
-if len(sys.argv) > 1 and sys.argv[1] == '--check-profile':
+if len(sys.argv) > 1 and sys.argv[1] in ('--check-profile', '--identify-profile'):
     if len(sys.argv) not in (3, 4):
-        sys.exit('usage: patch_lift.py --check-profile EBOOT.ELF [PROFILE_ID|auto]')
-    check_game_profile(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else 'auto')
+        sys.exit('usage: patch_lift.py [--check-profile|--identify-profile] EBOOT.ELF [PROFILE_ID|auto]')
+    profile, checksum = check_game_profile(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else 'auto')
+    print(profile if sys.argv[1] == '--identify-profile' else
+          f'Game profile: {profile} (SHA-256 {checksum})')
     sys.exit(0)
 RECOMP = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "game", "src", "recomp")
 
@@ -570,7 +572,7 @@ print(f'{n} file(s) patched')
 #     sounds out of its mix. The controller has its own player now
 #     (tools/ps3recomp/libs/audio/ds_player.c): an older patched lift has
 #     those hook calls removed.
-SPU_DIR = os.path.join(ROOT, 'game', 'spu')
+SPU_DIR = os.environ.get('RACACIT_SPU_DIR', os.path.join(ROOT, 'game', 'spu'))
 for lift in ('sub_BFD480_04000', 'spu_0001_at_00BED400'):
     p = os.path.join(SPU_DIR, lift, 'spu_recomp.c')
     if not os.path.exists(p):

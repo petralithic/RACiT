@@ -18,11 +18,24 @@ ELF="${1:-$ROOT/input/EBOOT.ELF}"
 OUT="$ROOT/out"
 RECOMP="$ROOT/game/src/recomp"
 SPU="$ROOT/game/spu"
+PRX="$ROOT/game/prx"
+BUILD="$ROOT/game/build"
 PY="${PY:-python3 -I}"
 
 [ -f "$ELF" ] || { echo "No ELF at $ELF — put your decrypted EBOOT.ELF in input/"; exit 1; }
 # Profiles identify both the disc region and the executable update.
-$PY "$ROOT/scripts/patch_lift.py" --check-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}"
+if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
+  PROFILE="$($PY "$ROOT/scripts/patch_lift.py" --identify-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}")"
+  OUT="$ROOT/out/$PROFILE"
+  RECOMP="$OUT/recomp"
+  SPU="$OUT/spu"
+  PRX="$OUT/prx"
+  BUILD="$OUT/build"
+else
+  $PY "$ROOT/scripts/patch_lift.py" --check-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}"
+fi
+export RACACIT_OUT="$OUT" RACACIT_SPU_DIR="$SPU" RACACIT_PRX_DIR="$PRX"
+export RACACIT_ELF="$ELF" RACACIT_ELF_STEM="$(basename "${ELF%.*}")"
 mkdir -p "$OUT" "$RECOMP" "$SPU"
 
 echo "== 1/5 Loader"
@@ -85,9 +98,9 @@ $PY "$ROOT/scripts/patch_lift.py" "$RECOMP"
 [ "${SKIP_DESKTOP:-0}" = 1 ] && { echo "Lifted: $RECOMP and $SPU"; exit 0; }
 
 echo "== 5/5 Desktop build"
-cmake -S "$ROOT/game" -B "$ROOT/game/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DPS3RECOMP_DIR="$PS3R" -DRECOMP_DIR="$RECOMP" \
+cmake -S "$ROOT/game" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DPS3RECOMP_DIR="$PS3R" -DRECOMP_DIR="$RECOMP" -DSPU_DIR="$SPU" -DPRX_DIR="$PRX" \
   -DPS3RECOMP_VULKAN_INCLUDE_DIR="$ROOT/tools/Vulkan-Headers/include" -DPS3RECOMP_RSX_VULKAN=ON \
   -DCMAKE_PREFIX_PATH="$ROOT/tools/sdl2"
-cmake --build "$ROOT/game/build" -j"$(nproc)"
-echo "Done: $ROOT/game/build/RaCACiTRecomp"
+cmake --build "$BUILD" -j"$(nproc)"
+echo "Done: $BUILD/RaCACiTRecomp"
