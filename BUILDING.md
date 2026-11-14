@@ -42,7 +42,9 @@ This gives you `game/build-win/game/RaCACiT.exe` and `launcher/build/RaCACiT Lau
 
 The sources stay written for `BCUS98124`. For the European disc the build makes a converted
 copy of them in `build/BCES00511/`, using the address map in `versions/BCES00511/addr_map.tsv`.
-Steps 1 to 4 above are not affected, and the two builds do not share generated code.
+The North American and European builds use separate generated sources. The European
+wrapper checks the executable fingerprint before copying sources or inputs into its
+build tree.
 
 You need, from your own console and disc, in `input/BCES00511/`:
 
@@ -101,9 +103,13 @@ Generation fingerprints the decrypted `EBOOT.ELF` before creating output or appl
 # Identify and validate the input without generating code.
 python3 -I scripts/patch_lift.py --check-profile input/EBOOT.ELF
 # Optionally require an exact version during the normal pipeline.
-RACACIT_GAME_PROFILE=BCUS98124-1.00 PY="$PWD/tools/venv/Scripts/python -I" SKIP_DESKTOP=1 bash scripts/pipeline.sh
+RACACIT_GAME_PROFILE=BCUS98124-1.00 PYTHON_EXECUTABLE="$PWD/tools/venv/Scripts/python" SKIP_DESKTOP=1 bash scripts/pipeline.sh
 ```
 
-This branch builds the existing **BCUS98124 disc 1.00** layout. It also recognizes **BCES00511 disc 1.00** and **BCUS98124 update 1.20**, and stops with an explanation because their ports are not included here. Unknown executables and explicit profile mismatches stop before generation. There is no force option that applies another version's hooks.
+The root pipeline builds **BCUS98124 disc 1.00**. For **BCES00511 disc 1.00**,
+use the Windows wrapper above. It stages a profile manifest for the European layout
+alongside the retargeted sources. The preflight rejects unknown executables,
+profile mismatches, and **BCUS98124 update 1.20**, whose mappings are separate.
 
-This is the identity and preflight prerequisite, not a completed multiple-version port. European-disc generation is proposed separately in [PR #26](https://github.com/HighDrexler/RACiT/pull/26); its fingerprint comes from that proposal and has not been checked against a local PAL dump. Both NA fingerprints were measured on decrypted original executables. Enabling another profile requires its own complete hook/data/SPU mappings, separate generated/build outputs, launcher selection, and runtime/save checks. Keep saves separate until cross-version compatibility has been checked. Do not infer an address offset from a neighbouring function: updates can change function bodies and data layouts.
+The European executable fingerprint comes from the PAL contribution. Keep saves
+in their region-specific directories until cross-version compatibility has been checked.
