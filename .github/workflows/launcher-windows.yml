@@ -1,0 +1,39 @@
+name: Windows launcher build
+on:
+  push:
+    branches: [ci/windows-launcher]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  launcher:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Tools where launcher/build.sh expects them
+        shell: pwsh
+        run: |
+          python -m venv tools/venv
+          tools/venv/Scripts/python -m pip install --only-binary=:all: ziglang==0.16.0
+          $v = '2.30.11'
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$v/SDL2-devel-$v-mingw.zip" -OutFile sdl.zip
+          Expand-Archive sdl.zip -DestinationPath sdl
+          New-Item -ItemType Directory -Force tools/sdl2-win | Out-Null
+          Copy-Item -Recurse "sdl/SDL2-$v/x86_64-w64-mingw32/include" tools/sdl2-win/include
+          Copy-Item -Recurse "sdl/SDL2-$v/x86_64-w64-mingw32/lib" tools/sdl2-win/lib
+      - name: Build the launcher exactly as launcher/build.sh does
+        shell: bash
+        run: bash launcher/build.sh
+      - name: The built launcher starts (--self-test)
+        shell: pwsh
+        run: |
+          Copy-Item tools/sdl2-win/../../sdl/SDL2-2.30.11/x86_64-w64-mingw32/bin/SDL2.dll launcher/build/ -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath "launcher/build/RaCACiT Launcher.exe" -ArgumentList '--self-test' -PassThru -Wait
+          "self-test exit code: $($p.ExitCode)"
+          exit $p.ExitCode
