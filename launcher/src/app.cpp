@@ -346,11 +346,6 @@ static void import_screen()
                                           "with the same name, and the launcher unlocks it.\n"
                                           "2. EBOOT.elf, the game's main program unlocked with RPCS3. Already in "
                                           "USRDIR? Then it is found by itself." });
-    scr.info.push_back({ "Making EBOOT.elf",
-                         "In RPCS3, choose Utilities > Decrypt PS3 Binaries and select EBOOT.BIN from your own dump. "
-                         "If the menu item is missing, open PowerShell in the RPCS3 folder and run:\n"
-                         ".\\rpcs3.exe --decrypt \"X:\\PathToGame\\PS3_GAME\\USRDIR\\EBOOT.BIN\"\n"
-                         "Replace the example path with yours, then select the resulting EBOOT.elf below." });
     Item iso = button(have_game ? "1. Game found: import another .iso" : "1. Import the game: a .iso",
                       "Unpacks it into the launcher (about 25 GB)", [] {
         const fs::path p = pick_open_file(g_hwnd, L"Pick your A Crack in Time disc image", L"Disc image (*.iso)", L"*.iso");
@@ -389,6 +384,15 @@ static void import_screen()
     });
     elf.accent = have_game && !gi.ok;
     scr.items.push_back(elf);
+    if (!gi.ok)
+        scr.items.push_back(button("How to make EBOOT.elf", "", [] {
+            message("Making EBOOT.elf",
+                    "In RPCS3, choose Utilities > Decrypt PS3 Binaries and select EBOOT.BIN from your own dump.\n\n"
+                    "If the menu item is missing, open PowerShell in the RPCS3 folder and run the following. "
+                    "Replace the example path with yours.\n\n"
+                    ".\\rpcs3.exe --decrypt \"X:\\PathToGame\\PS3_GAME\\USRDIR\\EBOOT.BIN\"\n\n"
+                    "Then select the resulting EBOOT.elf in the launcher.");
+        }));
     if (have_game && !gi.ok) {
         const fs::path usrdir = gi.root / L"PS3_GAME" / L"USRDIR";
         scr.items.push_back(button("Show EBOOT.BIN", "Its folder, to decrypt it in RPCS3", [usrdir] { shell_open(usrdir); }));
