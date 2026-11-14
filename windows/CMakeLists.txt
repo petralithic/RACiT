@@ -41,5 +41,5 @@ set(PS3RECOMP_DIR "${RACACIT_ROOT}/tools/ps3recomp" CACHE PATH "ps3recomp SDK ch
 set(RECOMP_DIR "${RACACIT_ROOT}/game/src/recomp" CACHE PATH "Lifted PPU sources")
 set(SPU_DIR    "${RACACIT_ROOT}/game/spu"        CACHE PATH "Lifted SPU sources")
 set(PRX_DIR    "${RACACIT_ROOT}/game/prx"        CACHE PATH "Firmware-derived PPU sources")
-set(PS3RECOMP_VULKAN_INCLUDE_DIR "${RACACIT_ROOT}/tools/Vulkan-Headers/include" CACHE PATH "" FORCE)
+set(PS3RECOMP_VULKAN_INCLUDE_DIR "${RACACIT_ROOT}/tools/Vulkan-Headers/include" CACHE PATH "Vulkan header directory")
 add_subdirectory("${RACACIT_ROOT}/game" "${CMAKE_BINARY_DIR}/game")
