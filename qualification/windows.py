@@ -8,7 +8,7 @@ import time
 
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
-SOURCE = '7e0d19e0e83b6ec13c253e7489ee951241ffcda9'
+SOURCE = '7cf3e28d65cb1336088fc601894f2e9b45078cc6'
 REPO = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ['RUNNER_TEMP']) / 'racit-components'
 
