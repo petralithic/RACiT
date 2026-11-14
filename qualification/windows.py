@@ -10,6 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
+    'launcher-import': '92e54de5f90a94488dd90c60b847bcb24761a8c5',
     'pal-launcher': '2f70bd8b99699aa0bc31c9aafdd44318b105237c',
     'pal': 'b9c4788a250630a9c7deb798f570beea382bee6f',
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
@@ -153,6 +154,12 @@ def check(name, sha):
     run('git', 'cat-file', '-e', sha + '^{commit}', cwd=REPO)
     source = ROOT / (name + '-racit')
     archive(REPO, sha, source)
+    if name == 'launcher-import':
+        run(ZIG, 'c++', '-target', 'x86_64-windows-gnu', '-std=c++17', '-O2',
+            '-municode', '-DUNICODE', '-D_UNICODE', '-I', SDL, '-c',
+            source / 'launcher/src/app.cpp', '-o', ROOT / 'launcher-import.o')
+        summary(name, 'PASS Windows launcher UI object with the executable import guidance.')
+        return
     if name == 'pal-launcher':
         os.environ['ZIG_EXE'] = str(ZIG)
         os.environ['PYTHON_EXE'] = Path(sys.executable).as_posix()
