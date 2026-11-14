@@ -329,10 +329,10 @@ static void present_guest_frame(void)
 /* The FIFO walker runs on frame_clock. A guest thread that has just moved
  * `put` and needs it consumed now (cellGcm_fifo_wake / cellGcm_fifo_sync)
  * cuts the loop's 4 ms sleep short through this event. Android has it too
- * (win32_compat's events), and so does macOS: without it the walker slept a fixed 4 ms a pass,
+ * (win32_compat's events): without it the walker slept a fixed 4 ms a pass,
  * and every RSX label the guest waited on cost up to 4 ms -- 52 fps in an
  * idle menu, ~40 in play, with every thread mostly waiting. */
-#if defined(_WIN32) || defined(__ANDROID__) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__ANDROID__)
 extern "C" int racacit_few_cpus(void);   /* sys_timer.c */
 static HANDLE s_walker_wake;
 static void walker_wake(void) { if (s_walker_wake) SetEvent(s_walker_wake); }
@@ -580,7 +580,7 @@ static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
     if (!title || !*title) title = "ps3recomp";
-#if defined(_WIN32) || defined(__ANDROID__) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__ANDROID__)
     s_walker_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
     g_gcm_wake_walker = walker_wake;
 #endif
@@ -616,7 +616,7 @@ static DWORD WINAPI frame_clock(LPVOID)
 #if defined(_WIN32) && !defined(__ANDROID__)
         racacit_memlog(rt_now_us());
 #endif
-#if defined(_WIN32) || defined(__ANDROID__) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__ANDROID__)
         /* Spin (yielding) up to ~1 ms for new FIFO work before sleeping: the
          * guest waits on RSX labels every frame, so every ms between its kick
          * and the walker starting is a ms of its frame time. */
