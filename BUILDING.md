@@ -136,3 +136,9 @@ Prepare a separate archive from your own game dump with `python scripts/prepare_
 Set `RACACIT_MENU_ARCHIVE` to the prepared file when running the player through its usual entry point. The player validates the archive header before booting the guest and redirects read-only opens of `packed/game/global_cached.psarc`. Original stat, installation and write paths retain the owner's game files. Leave the variable unset to use the original archive.
 
 These menu hooks target BCUS98124 disc 1.00. The bundled action payload contains only the adjacent AS2 source compiled into AVM1 actions. Game artwork and movies are supplied by the owner's archive.
+
+The menu ActionScript publishes binding labels to its own menu fields. The
+menu and the existing in-game font-record swap both use the desktop input
+layer’s current keyboard/controller decision. The menu delta does not rewrite
+the in-game font atlas, and the runtime redirects only read-only opens of the
+explicitly configured prepared menu archive.
