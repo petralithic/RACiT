@@ -31,6 +31,12 @@ if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
   SPU="$OUT/spu"
   PRX="$OUT/prx"
   BUILD="$OUT/build"
+  mkdir -p "$OUT"
+  STAGE="$(mktemp -d "$OUT/.lift.XXXXXXXX")"
+  trap 'rm -rf -- "$STAGE"' EXIT
+  RECOMP="$STAGE/recomp"
+  SPU="$STAGE/spu"
+  PRX="$STAGE/prx"
 else
   $PY "$ROOT/scripts/patch_lift.py" --check-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}"
 fi
@@ -93,6 +99,36 @@ $PY "$ROOT/scripts/lift_spu_jobs.py" "$ELF" --extra
 # 144, the AsyncMoby animation and FXVis effect modules among them).
 $PY "$ROOT/scripts/lift_spu_jobs.py" "$ELF" --sub
 $PY "$ROOT/scripts/patch_lift.py" "$RECOMP"
+
+if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
+  # Publish only after both hook passes succeed. Keep unchanged files so
+  # incremental builds can reuse their objects.
+  publish_lift() {
+    local source="$1" target="$2" entry dest
+    mkdir -p "$target"
+    for entry in "$target"/*; do
+      [ -e "$entry" ] || continue
+      if [ ! -e "$source/${entry##*/}" ]; then
+        rm -rf -- "$entry"
+      fi
+    done
+    for entry in "$source"/*; do
+      [ -e "$entry" ] || continue
+      dest="$target/${entry##*/}"
+      if [ -d "$entry" ]; then
+        publish_lift "$entry" "$dest"
+      elif ! cmp -s "$entry" "$dest"; then
+        mv -f -- "$entry" "$dest"
+      fi
+    done
+  }
+  publish_lift "$RECOMP" "$OUT/recomp"
+  publish_lift "$SPU" "$OUT/spu"
+  publish_lift "$PRX" "$OUT/prx"
+  RECOMP="$OUT/recomp"
+  SPU="$OUT/spu"
+  PRX="$OUT/prx"
+fi
 
 # SKIP_DESKTOP=1: lift only (Windows: the build is windows/, see README).
 [ "${SKIP_DESKTOP:-0}" = 1 ] && { echo "Lifted: $RECOMP and $SPU"; exit 0; }
