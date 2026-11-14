@@ -23,6 +23,8 @@ BUILD="$ROOT/game/build"
 PY="${PY:-python3 -I}"
 
 [ -f "$ELF" ] || { echo "No ELF at $ELF — put your decrypted EBOOT.ELF in input/"; exit 1; }
+LIBSRE="${LIBSRE:-$ROOT/input/libsre.prx}"
+[ -f "$LIBSRE" ] || { echo "No libsre.prx at $LIBSRE — decrypt dev_flash/sys/external/libsre.sprx with RPCS3"; exit 1; }
 # Profiles identify both the disc region and the executable update.
 if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
   PROFILE="$($PY "$ROOT/scripts/patch_lift.py" --identify-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}")"
@@ -96,8 +98,6 @@ $PY "$PS3R/tools/extract_spu_images.py" "$ELF" --output "$OUT/spu_images" \
 # game/spu/spu_workloads.c). Lifting them bare here gives every image the same
 # spu_func_* names and the link fails on duplicates. Needs a decrypted
 # libsre.prx from your own firmware in input/.
-LIBSRE="${LIBSRE:-$ROOT/input/libsre.prx}"
-[ -f "$LIBSRE" ] || { echo "No libsre.prx at $LIBSRE — decrypt dev_flash/sys/external/libsre.sprx with RPCS3"; exit 1; }
 $PY "$ROOT/scripts/lift_libsre.py" "$LIBSRE"
 
 # Raw SPURS policy modules and igPm job binaries (content-matched overlays),
