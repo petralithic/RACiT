@@ -394,3 +394,5 @@ set_property(SOURCE ${RECOMP_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS PPU_IN
 # Install
 # ---------------------------------------------------------------------------
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+
+target_sources(${PROJECT_NAME} PRIVATE racit-present-times.cpp)

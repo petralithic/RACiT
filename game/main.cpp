@@ -301,6 +301,7 @@ static unsigned long long s_rt_present_us;
 extern "C" void ps3_tl_at(unsigned long long t, char ev, uint32_t a, uint32_t b);
 extern "C" void ps3_tl(char ev, uint32_t a, uint32_t b);
 extern "C" unsigned long long ps3_qpc_us(void);
+extern "C" void racit_record_present(void);
 static void present_guest_frame(void)
 {
     unsigned long long _t = rt_now_us();
@@ -311,6 +312,7 @@ static void present_guest_frame(void)
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     InterlockedIncrement(&g_frames_presented);
+    racit_record_present();
     /* Local measurement: guest frames per 2 s, with the slowest interval. */
     { static unsigned long long t0, last, worst; static unsigned n;
       const unsigned long long now = rt_now_us();
