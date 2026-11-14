@@ -1114,6 +1114,7 @@ static void android_setup(int* argc, char*** argv)
     mkdir(path, 0755);
     snprintf(path, sizeof path, "%s/settings/settings.txt", base);
     setenv("RACACIT_SETTINGS_FILE", path, 0);
+    setenv("RACACIT_HLE_SPURS", "1", 0);
     setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 0);
     setenv("PS3RECOMP_VK_WINDOW", "1", 0);
     setenv("PS3RECOMP_VK_FULLSCREEN", "1", 0);
