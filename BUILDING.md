@@ -46,7 +46,7 @@ and tools that read those paths can continue using the default invocation.
 
 Set `RACACIT_PROFILE_OUTPUT=1` before running `scripts/pipeline.sh` to generate under
 `out/<profile>/`. The pipeline identifies the profile from the executable
-fingerprint, and publishes generated sources after the lift and patch passes
+fingerprint, and publishes generated sources and metadata after the lift and patch passes
 succeed. The `recomp`, `spu` and `prx` directories in that profile are managed
 by the pipeline. Keep manually edited sources elsewhere. One pipeline run at a time
 can write each profile. If a forced termination leaves `.pipeline-lock` behind,

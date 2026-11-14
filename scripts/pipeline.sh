@@ -26,8 +26,9 @@ PY="${PY:-python3 -I}"
 # Profiles identify both the disc region and the executable update.
 if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
   PROFILE="$($PY "$ROOT/scripts/patch_lift.py" --identify-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}")"
-  OUT="$ROOT/out/$PROFILE"
-  BUILD="$OUT/build"
+  PROFILE_DIR="$ROOT/out/$PROFILE"
+  OUT="$PROFILE_DIR"
+  BUILD="$PROFILE_DIR/build"
   mkdir -p "$OUT"
   LOCK="$OUT/.pipeline-lock"
   if ! mkdir "$LOCK"; then
@@ -45,6 +46,7 @@ if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
   trap 'exit 130' INT
   trap 'exit 143' TERM
   STAGE="$(mktemp -d "$OUT/.lift.XXXXXXXX")"
+  OUT="$STAGE/metadata"
   RECOMP="$STAGE/recomp"
   SPU="$STAGE/spu"
   PRX="$STAGE/prx"
@@ -133,13 +135,23 @@ if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
       fi
     done
   }
-  publish_lift "$RECOMP" "$OUT/recomp"
-  publish_lift "$SPU" "$OUT/spu"
-  publish_lift "$PRX" "$OUT/prx"
+  for entry in "$OUT"/*; do
+    [ -e "$entry" ] || continue
+    dest="$PROFILE_DIR/${entry##*/}"
+    if [ -d "$entry" ]; then
+      publish_lift "$entry" "$dest"
+    elif ! cmp -s "$entry" "$dest"; then
+      mv -f -- "$entry" "$dest"
+    fi
+  done
+  publish_lift "$RECOMP" "$PROFILE_DIR/recomp"
+  publish_lift "$SPU" "$PROFILE_DIR/spu"
+  publish_lift "$PRX" "$PROFILE_DIR/prx"
+  OUT="$PROFILE_DIR"
   RECOMP="$OUT/recomp"
   SPU="$OUT/spu"
   PRX="$OUT/prx"
-  export RACACIT_SPU_DIR="$SPU" RACACIT_PRX_DIR="$PRX"
+  export RACACIT_OUT="$OUT" RACACIT_SPU_DIR="$SPU" RACACIT_PRX_DIR="$PRX"
 fi
 
 # SKIP_DESKTOP=1: lift only (Windows: the build is windows/, see README).
