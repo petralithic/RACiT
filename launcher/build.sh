@@ -3,8 +3,8 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-Z="$ROOT/tools/venv/Lib/site-packages/ziglang/zig.exe"
-PY="$ROOT/tools/venv/Scripts/python"
+Z="${ZIG_EXE:-$ROOT/tools/venv/Lib/site-packages/ziglang/zig.exe}"
+PY="${PYTHON_EXE:-$ROOT/tools/venv/Scripts/python}"
 OUT="$HERE/build"
 mkdir -p "$OUT"
 [ "$OUT/icon.ico" -nt "$HERE/make_icon.py" ] && [ "$OUT/icon.ico" -nt "$HERE/assets/emblem_256.png" ] ||
