@@ -1,0 +1,77 @@
+--- a/libs/audio/cellAudio.c
++++ b/libs/audio/cellAudio.c
+@@ -23,6 +23,7 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <stdint.h>
++#include <stdatomic.h>
+ #include <math.h>
+ 
+ /* Event-queue push/lookup (runtime/syscalls/sys_event.c). Forward-declared
+@@ -189,7 +190,7 @@
+  * always did, with pub_index = read_index. */
+ #define AUDIO_DEV_BLOCKS 4u         /* in the device's queue: 21 ms */
+ static u32 s_q_target = 6;          /* blocks wanted in the stretcher beyond its frame: 6 (32 ms), +2 per dropout with sound, up to 24 (128 ms) */
+-static volatile unsigned s_finished[CELL_AUDIO_PORT_MAX];   /* blocks the game has finished, ever */
++static atomic_uint s_finished[CELL_AUDIO_PORT_MAX];   /* blocks the game has finished, ever */
+ static unsigned s_pub_steps;        /* for the 30 s report */
+ static int s_pub_mode;              /* the above is on (a device is open; not RACACIT_AUDIO_NOWAIT) */
+ static u8  s_port_sound[CELL_AUDIO_PORT_MAX];   /* the last block read from the port held sound */
+@@ -895,7 +896,7 @@
+         if (ea < base || ea >= base + port->buf_size || size != bb) continue;
+         const u32 blk = (ea - base) / bb;
+         if (blk < 32) {
+-            s_finished[p]++;
++            atomic_fetch_add_explicit(&s_finished[p], 1, memory_order_relaxed);
+ #ifdef _WIN32
+             /* The thread that runs the game's audio job is its SPU, real-time on
+              * the PS3. At normal priority, behind the game's boosted PPU threads,
+@@ -980,17 +981,18 @@
+                     s_q_target, s_q_target * CELL_AUDIO_BLOCK_SAMPLES * 1000u / CELL_AUDIO_SAMPLE_RATE, 10);
+         }
+     }
+-    if (!t0) { t0 = t; f0 = s_finished[0]; s_pub_steps = 0; }
++    const unsigned finished = atomic_load_explicit(&s_finished[0], memory_order_relaxed);
++    if (!t0) { t0 = t; f0 = finished; s_pub_steps = 0; }
+     if (t - t0 < 30000000ull) return;
+     const double sec = (double)(t - t0) / 1000000.0;
+     const unsigned long long st = s_st.stretched_steps - st0, n = s_st.steps - n0;
+     if (s_late_fades || s_late_skips || st)
+         fprintf(stderr, "[cellAudio] in the last 30 s: stretched %u%% of the time, %u dropouts, %u jumps, game finished %.1f blocks/s, read index %.1f/s (in hand %u blocks)%c",
+-                n ? (unsigned)(st * 100u / n) : 0u, s_late_fades, s_late_skips, (s_finished[0] - f0) / sec, s_pub_steps / sec, s_q_target, 10);
++                n ? (unsigned)(st * 100u / n) : 0u, s_late_fades, s_late_skips, (finished - f0) / sec, s_pub_steps / sec, s_q_target, 10);
+     quiet = s_late_fades ? 0 : quiet + 1;
+     if (quiet >= 2 && s_q_target > 6) { s_q_target -= 2; quiet = 0; }
+     s_late_skips = s_late_fades = 0; s_pub_steps = 0;
+-    f0 = s_finished[0]; st0 = s_st.stretched_steps; n0 = s_st.steps;
++    f0 = finished; st0 = s_st.stretched_steps; n0 = s_st.steps;
+     t0 = t;
+ #endif
+ }
+@@ -1053,14 +1055,15 @@
+              * nothing to do, just when it is furthest behind. Wait for it at 6
+              * (lag counts finished blocks; some of those are on their way), but
+              * never for long: it is not this index the game may wait on. */
+-            const int lag = (int)(port->pub_steps - (s_finished[p] - port->pub_finished_base));
++            const unsigned finished = atomic_load_explicit(&s_finished[p], memory_order_relaxed);
++            const int lag = (int)(port->pub_steps - (finished - port->pub_finished_base));
+             if (lag > max_lag) max_lag = lag;
+             if (lag >= 6 && port->pub_hold_ticks < 16) {
+                 port->pub_hold_ticks++;
+                 continue;
+             }
+             if (port->pub_hold_ticks >= 16 || lag < -32)
+-                port->pub_finished_base = s_finished[p] - port->pub_steps;
++                port->pub_finished_base = finished - port->pub_steps;
+             port->pub_hold_ticks = 0;
+             port->pub_steps++;
+             s_pub_steps++;
+@@ -1380,7 +1383,7 @@
+     port->write_index = 0;
+     const int slot = (int)(port - s_ports);
+     port->pub_steps = 0;
+-    port->pub_finished_base = s_finished[slot];
++    port->pub_finished_base = atomic_load_explicit(&s_finished[slot], memory_order_relaxed);
+     port->pub_hold_ticks = 0;
+     s_port_done_seen[slot] = 0;
+     memset((void*)s_blk_done[slot], 0, sizeof s_blk_done[0]);
