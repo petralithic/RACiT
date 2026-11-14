@@ -172,5 +172,11 @@ cmake -S "$ROOT/game" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DPS3RECOMP_DIR="$PS3R" -DRECOMP_DIR="$RECOMP" -DSPU_DIR="$SPU" -DPRX_DIR="$PRX" \
   -DPS3RECOMP_VULKAN_INCLUDE_DIR="$ROOT/tools/Vulkan-Headers/include" -DPS3RECOMP_RSX_VULKAN=ON \
   -DCMAKE_PREFIX_PATH="$ROOT/tools/sdl2"
-cmake --build "$BUILD" -j"$(nproc)"
+if [ -n "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]; then
+  cmake --build "$BUILD"
+elif command -v nproc >/dev/null 2>&1; then
+  cmake --build "$BUILD" --parallel "$(nproc)"
+else
+  cmake --build "$BUILD" --parallel "$(getconf _NPROCESSORS_ONLN)"
+fi
 echo "Done: $BUILD/RaCACiTRecomp"
