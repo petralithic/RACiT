@@ -1,0 +1,43 @@
+--- a/libs/audio/cellAudio.c
++++ b/libs/audio/cellAudio.c
+@@ -130,7 +130,6 @@
+     u64                  pub_index;      /* the position the game sees (audio_pub_tick) */
+     unsigned             pub_steps;
+     unsigned             pub_finished_base;
+-    u8                   pub_hold_ticks;
+     u64                  write_index;    /* where the game is writing */
+     /* For address reporting to guest */
+     u64                  port_addr;      /* guest-visible buffer address */
+@@ -1051,20 +1050,14 @@
+             for (u32 b = 0; b < nblock && b < 32; b++) done += s_blk_done[p][b];
+             any = 1; if (done > unread) unread = done;
+             if (done >= nblock) continue;
+-            /* A whole lap ahead of the writer reads to it as "equal": full,
+-             * nothing to do, just when it is furthest behind. Wait for it at 6
+-             * (lag counts finished blocks; some of those are on their way), but
+-             * never for long: it is not this index the game may wait on. */
++            /* Hold once at the lag threshold, then measure from this point.
++             * Repeated holds at the same lag can starve the guest refill loop. */
+             const unsigned finished = atomic_load_explicit(&s_finished[p], memory_order_relaxed);
+             const int lag = (int)(port->pub_steps - (finished - port->pub_finished_base));
+             if (lag > max_lag) max_lag = lag;
+-            if (lag >= 6 && port->pub_hold_ticks < 16) {
+-                port->pub_hold_ticks++;
+-                continue;
+-            }
+-            if (port->pub_hold_ticks >= 16 || lag < -32)
++            if (lag >= 6 || lag < -32)
+                 port->pub_finished_base = finished - port->pub_steps;
+-            port->pub_hold_ticks = 0;
++            if (lag >= 6) continue;
+             port->pub_steps++;
+             s_pub_steps++;
+             port->pub_index++;
+@@ -1384,7 +1377,6 @@
+     const int slot = (int)(port - s_ports);
+     port->pub_steps = 0;
+     port->pub_finished_base = atomic_load_explicit(&s_finished[slot], memory_order_relaxed);
+-    port->pub_hold_ticks = 0;
+     s_port_done_seen[slot] = 0;
+     memset((void*)s_blk_done[slot], 0, sizeof s_blk_done[0]);
+ 

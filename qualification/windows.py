@@ -10,6 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
+    'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
     'vulkan-race': 'b0732229cfc7c854868be303358b761e28007a63',
     'update': 'f599c60ab1c005a1e5b3fe313f21d0fd07f760e3',
@@ -170,15 +171,15 @@ def check(name, sha):
     out = ROOT / (name + '-out')
     out.mkdir()
     fixture = REPO / 'qualification'
-    if name == 'audio-atomic':
-        extra_patch = fixture / 'audio-atomic.patch'
+    if name in ('audio-atomic', 'audio-rebase'):
+        extra_patch = fixture / f'{name}.patch'
         run('git', 'apply', '--check', extra_patch, cwd=sdk)
         run('git', 'apply', extra_patch, cwd=sdk)
         audio = sdk / 'libs/audio/cellAudio.c'
         object_file(sdk, audio, out / 'audio-wasapi.o')
         run(*compiler(sdk), '-DPS3RECOMP_AUDIO_USE_SDL2=1',
             '-c', audio, '-o', out / 'audio-sdl.o')
-        summary(name, 'PASS atomic completion counter with Windows WASAPI and SDL2.')
+        summary(name, 'PASS patched audio source with Windows WASAPI and SDL2.')
     elif name == 'menu':
         # Match scripts/setup_windows.sh's existing official zlib pin.
         zlib = fetch('zlib', 'https://github.com/madler/zlib.git',
