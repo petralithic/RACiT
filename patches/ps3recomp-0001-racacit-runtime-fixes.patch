@@ -332,7 +332,7 @@ index 0000000..68a2795
 +
 +#endif /* AUDIO_STRETCH_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index b51fb7c..9fa1944 100644
+index b51fb7c..a339bc4 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -15,6 +15,9 @@
@@ -976,7 +976,7 @@ index b51fb7c..9fa1944 100644
      /* Push the audio-period event (data1 = CELL_AUDIO_EVENT_MIX = 0) to each
       * registered notify queue, so the game's audio loop (blocked on
       * sys_event_queue_receive) wakes once per block and writes the next one.
-@@ -528,17 +1013,117 @@ static void audio_notify_event_queues(void)
+@@ -528,17 +1013,116 @@ static void audio_notify_event_queues(void)
      for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
          if (!s_notify_queues[i].in_use) continue;
          uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
@@ -1014,17 +1014,16 @@ index b51fb7c..9fa1944 100644
 +            for (u32 b = 0; b < nblock && b < 32; b++) done += s_blk_done[p][b];
 +            any = 1; if (done > unread) unread = done;
 +            if (done >= nblock) continue;
-+            /* A whole lap ahead of the writer reads to it as "equal": full,
-+             * nothing to do, just when it is furthest behind. Wait for it at 6
-+             * (lag counts finished blocks; some of those are on their way), but
-+             * never for long: it is not this index the game may wait on. */
-+            { static unsigned s_steps[CELL_AUDIO_PORT_MAX], s_base[CELL_AUDIO_PORT_MAX]; static u8 s_hold[CELL_AUDIO_PORT_MAX];
-+              const int lag = (int)(s_steps[p] - (s_finished[p] - s_base[p]));
-+              if (lag >= 6 && s_hold[p] < 16) { s_hold[p]++; if (lag > max_lag) max_lag = lag; continue; }
-+              if (s_hold[p] >= 16 || lag < -32) s_base[p] = s_finished[p] - s_steps[p];
-+              s_hold[p] = 0;
-+              s_steps[p]++;
-+              if (lag > max_lag) max_lag = lag; }
++            /* Hold once at the lag threshold, then measure from this point.
++             * Repeated holds at the same lag can starve the guest refill loop. */
++            static unsigned s_steps[CELL_AUDIO_PORT_MAX], s_base[CELL_AUDIO_PORT_MAX];
++            const unsigned finished = s_finished[p];
++            const int lag = (int)(s_steps[p] - (finished - s_base[p]));
++            if (lag > max_lag) max_lag = lag;
++            if (lag >= 6 || lag < -32)
++                s_base[p] = finished - s_steps[p];
++            if (lag >= 6) continue;
++            s_steps[p]++;
 +            s_pub_steps++;
 +            port->pub_index++;
 +            if (port->read_idx_addr)
@@ -1096,7 +1095,7 @@ index b51fb7c..9fa1944 100644
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
       * the old Sleep(2)/Sleep(5) loop keyed on a queue depth the 1056-frame
-@@ -550,6 +1135,22 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -550,6 +1134,22 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      unsigned long long blocks = 0;
      while (s_mix_thread_running) {
          const int room = audio_backend_room();
@@ -1119,7 +1118,7 @@ index b51fb7c..9fa1944 100644
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
          if (room < 0) {
              LARGE_INTEGER now; QueryPerformanceCounter(&now);
-@@ -573,11 +1174,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -573,11 +1173,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
                  float a = s_mix_buffer[i]; if (a < 0) a = -a; if (a > pk) pk = a; }
              if ((++_n % 200) == 0 || (pk > 0.001f && _n < 40))
                  fprintf(stderr, "[audio-peak] block#%u peak=%.4f\n", _n, pk); } }
@@ -1132,7 +1131,7 @@ index b51fb7c..9fa1944 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-@@ -610,6 +1207,10 @@ static void* audio_mix_thread_func(void* arg)
+@@ -610,6 +1206,10 @@ static void* audio_mix_thread_func(void* arg)
  
      while (s_mix_thread_running) {
          audio_mix_one_block();
@@ -1143,7 +1142,7 @@ index b51fb7c..9fa1944 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          audio_notify_event_queues();
  
-@@ -629,6 +1230,8 @@ static void* audio_mix_thread_func(void* arg)
+@@ -629,6 +1229,8 @@ static void* audio_mix_thread_func(void* arg)
  static int audio_start_mix_thread(void)
  {
      s_mix_thread_running = 1;
@@ -1152,7 +1151,7 @@ index b51fb7c..9fa1944 100644
  
  #ifdef _WIN32
      s_mix_thread = (HANDLE)_beginthreadex(NULL, 0, audio_mix_thread_func,
-@@ -699,15 +1302,9 @@ s32 cellAudioInit(void)
+@@ -699,15 +1301,9 @@ s32 cellAudioInit(void)
      }
  
  
@@ -1171,7 +1170,7 @@ index b51fb7c..9fa1944 100644
      if (audio_start_mix_thread() < 0) {
          printf("[cellAudio] WARNING: Could not start mixing thread\n");
      }
-@@ -785,7 +1382,10 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
+@@ -785,7 +1381,10 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
      port->param.nChannel = nch;
      port->param.nBlock   = nblk;
      port->read_index  = 0;
@@ -1182,7 +1181,7 @@ index b51fb7c..9fa1944 100644
  
      /* Allocate the audio buffer in GUEST memory so portAddr/readIndexAddr are
       * real guest addresses (the game's mixer -- FMOD here -- writes PCM there
-@@ -890,6 +1490,10 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -890,6 +1489,10 @@ s32 cellAudioPortStop(u32 portNum)
  
  s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  {
@@ -1193,7 +1192,7 @@ index b51fb7c..9fa1944 100644
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -907,8 +1511,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -907,8 +1510,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
          mutex_unlock(&s_audio_mutex);
          return CELL_AUDIO_ERROR_PARAM;
      }
@@ -1204,7 +1203,7 @@ index b51fb7c..9fa1944 100644
      mutex_unlock(&s_audio_mutex);
  
      vm_write64(tag_ea, t);
-@@ -917,6 +1521,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -917,6 +1520,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  
  s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
  {
@@ -1215,7 +1214,7 @@ index b51fb7c..9fa1944 100644
      uint32_t stamp_ea = (uint32_t)(uintptr_t)stamp;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -928,7 +1536,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
+@@ -928,7 +1535,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
          return CELL_AUDIO_ERROR_PARAM;
  
      mutex_lock(&s_audio_mutex);
@@ -1224,7 +1223,7 @@ index b51fb7c..9fa1944 100644
      mutex_unlock(&s_audio_mutex);
      if (tag > global_counter)
          return CELL_AUDIO_ERROR_TAG_NOT_FOUND;
-@@ -1074,7 +1682,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
+@@ -1074,7 +1681,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
      vm_write32(cfg + 24, port->buf_size);                                   /* portSize */
      vm_write32(cfg + 28, (u32)port->port_addr);                             /* portAddr */
  
