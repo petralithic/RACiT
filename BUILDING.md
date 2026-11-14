@@ -38,6 +38,11 @@ bash launcher/build.sh
 
 This gives you `game/build-win/game/RaCACiT.exe` and `launcher/build/RaCACiT Launcher.exe`.
 
+For the desktop build invoked by `scripts/pipeline.sh`, set
+`CMAKE_BUILD_PARALLEL_LEVEL=2` to cap native compilation at two workers.
+The Windows sequence above skips that step and sets its worker count on the
+separate `cmake --build` command. Change `-j6` to `-j2` there for the same cap.
+
 ## Optional profile-specific output
 
 The default pipeline still writes metadata to `out/` and generated sources to
