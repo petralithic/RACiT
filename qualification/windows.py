@@ -227,7 +227,13 @@ def check(name, sha):
         run(*compiler(sdk), '-I', sdk / 'runtime/spu', '-I', zlib,
             '-c', sdk / 'libs/spurs/cellSpurs.c',
             '-o', out / 'cellSpurs.o')
-        summary(name, 'PASS exact patched SPURS object for Windows x86_64. Game linking and gameplay are outside this check.')
+        spurs = (sdk / 'libs/spurs/cellSpurs.c').read_text(encoding='utf-8')
+        start = spurs.index('    static volatile LONG mode; /* 0: uninitialized, 1: inline, 2: worker */')
+        end = spurs.index('    WakeConditionVariable(&s_ez_cv);', start)
+        end = spurs.index('    return CELL_OK;', end) + len('    return CELL_OK;')
+        (out / 'archive_worker_submit.h').write_text(spurs[start:end] + '\n', encoding='utf-8')
+        executable(sdk, 'archive-worker-start', out, fixture / 'archive_worker.c', extra=['-I', out])
+        summary(name, 'PASS patched Windows SPURS object and worker-start fallback and retry fixture.')
     elif name in ('update', 'vulkan-race'):
         run(*compiler(sdk), '-DPS3RECOMP_WIN_USE_SDL2=1',
             '-c', sdk / 'libs/video/rsx_vulkan_backend.c',
