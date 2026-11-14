@@ -153,6 +153,14 @@ def main():
         sys.exit('Expected ' + profile['id'] + ' EBOOT.ELF; found SHA-256 ' + checksum
                  + '. Retargeting stopped.')
 
+    tools = os.path.join(ROOT, 'tools')
+    work_tools = os.path.join(work, 'tools')
+    if os.path.lexists(work_tools) and (
+            not os.path.isdir(work_tools) or not os.path.isdir(tools)
+            or not os.path.samefile(work_tools, tools)):
+        sys.exit('Unexpected tools directory in build/' + title
+                 + '; expected a link to this checkout’s tools directory.')
+
     for top in COPY_DIRS:
         for folder, dirs, files in os.walk(os.path.join(ROOT, top)):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('build')]
@@ -190,7 +198,7 @@ def main():
         src, dst = os.path.join(input_dir, name), os.path.join(work, 'input', name)
         if not os.path.exists(dst) or not filecmp.cmp(src, dst, shallow=False):
             shutil.copy2(src, dst)
-    link_folder(os.path.join(work, 'tools'), os.path.join(ROOT, 'tools'))
+    link_folder(work_tools, tools)
 
     for a in sorted(r.guessed):
         print('warning: 0x%X is not in the map, moved with its neighbour' % a)
