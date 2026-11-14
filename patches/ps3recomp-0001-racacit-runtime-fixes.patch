@@ -9864,7 +9864,7 @@ index dab4380..6132681 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 5c50e4a..864ac24 100644
+index 5c50e4a..61a6c49 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -11,6 +11,7 @@
@@ -10941,12 +10941,12 @@ index 5c50e4a..864ac24 100644
 + * and effect pass after it; over open sky (depth 1.0) the copy said 0, and
 + * all of them failed their depth test there: the Aphelion's blaster bolts
 + * were invisible until they flew in front of something. */
++/* This full-screen quad carries only ATTR0; no colour/texcoord inputs. */
++static const char* const kEngDepthAsColorVS =
++"float4 main(float4 a0 : ATTR0) : SV_Position { return a0; }\n";
 +static const char* const kEngDepthAsColorPS =
 +"struct PSInput {\n"
-+"    float4 position : SV_POSITION; float4 col0 : COLOR0; float4 col1 : COLOR1;\n"
-+"    float4 fog : FOG;\n"
-+"    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
-+"    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n"
++"    float4 position : SV_POSITION;\n"
 +"};\n"
 +"Texture2D    rsx_tex[16] : register(t0);\n"
 +"SamplerState rsx_samp[16] : register(s0);\n"
@@ -10999,7 +10999,7 @@ index 5c50e4a..864ac24 100644
 +    memset(&rs, 0, sizeof rs);
 +    rs.color_mask = 0x01010101u;
 +    if (!s_d2c_pipe) {
-+        s_d2c_pipe = g.be->pipeline_create(g.be->user, kEngFixedVS, kEngDepthAsColorPS, &rs, &lp,
++        s_d2c_pipe = g.be->pipeline_create(g.be->user, kEngDepthAsColorVS, kEngDepthAsColorPS, &rs, &lp,
 +                                           lp.stride, RSX_BE_FMT_R8G8B8A8, 1u);
 +        if (!s_d2c_pipe) {
 +            s_d2c_pipe = ENG_INVALID;
@@ -11752,13 +11752,20 @@ index 5c50e4a..864ac24 100644
 + * read this way; sampled as plain depth, every pixel of the shadow volume
 + * read as shadowed -- a dark box around the player. */
 +static u32 eng_shadow_mask(u8 func[16])
-+{
-+    u32 mask = 0;
+ {
+     u32 mask = 0;
+-    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
 +    for (u32 u = 0; u < 16; u++) {
 +        func[u] = 0;
 +        if (u >= RSX_DSP_NUM_TEXTURES) continue;
-+        rsx_dsp_texture t;
-+        rsx_dsp_get_texture(&g.rsx, u, &t);
+         rsx_dsp_texture t;
+         rsx_dsp_get_texture(&g.rsx, u, &t);
+-        /* A cube face is square by construction, so a non-square image
+-         * cannot be one; the fragment program is compiled against this mask
+-         * and a texturecube slot filled with a 2D texture is a validation
+-         * failure, not a wrong pixel. */
+-        if (t.enabled && t.cubemap && t.width && t.width == t.height)
+-            mask |= 1u << u;
 +        if (!t.enabled || !eng_is_depth_fmt(t.format)) continue;
 +        const u32 zf = (t.wrap >> 28) & 7u;
 +        if (!zf) continue;
@@ -11768,30 +11775,6 @@ index 5c50e4a..864ac24 100644
 +        { static long ov = -2; if (ov == -2) { const char* e = getenv("RSX_ENG_SHADOW_FUNC"); ov = e ? atol(e) : -1; }
 +          if (ov >= 0) func[u] = (u8)ov; }
 +        mask |= 1u << u;
-+    }
-+    return mask;
-+}
-+
-+/* Units whose format carries RSX_TEX_FMT_UNNORM: the program samples them
-+ * with texel coordinates (Bink's YUV planes in A Crack in Time's movies), and
-+ * the HLSL sampler wants 0..1, so the coordinates are divided by the image
-+ * size in the shader (rsx_fp_apply_unnorm_scale -- same as rsx_live_draw). */
-+static u32 eng_unnorm_mask(u32 dim[][2])
- {
-     u32 mask = 0;
-     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
-         rsx_dsp_texture t;
-         rsx_dsp_get_texture(&g.rsx, u, &t);
--        /* A cube face is square by construction, so a non-square image
--         * cannot be one; the fragment program is compiled against this mask
--         * and a texturecube slot filled with a 2D texture is a validation
--         * failure, not a wrong pixel. */
--        if (t.enabled && t.cubemap && t.width && t.width == t.height)
--            mask |= 1u << u;
-+        dim[u][0] = dim[u][1] = 0;
-+        if (!t.enabled || !(t.format & RSX_TEX_FMT_UNNORM) || !t.width || !t.height) continue;
-+        mask |= 1u << u;
-+        dim[u][0] = t.width; dim[u][1] = t.height;
      }
      return mask;
  }
@@ -11802,6 +11785,31 @@ index 5c50e4a..864ac24 100644
 - * leave the pipeline's vertex descriptor short of what the shader reads. */
 -static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
 -                              const u8** out_fp, u32* out_fp_size)
++/* Units whose format carries RSX_TEX_FMT_UNNORM: the program samples them
++ * with texel coordinates (Bink's YUV planes in A Crack in Time's movies), and
++ * the HLSL sampler wants 0..1, so the coordinates are divided by the image
++ * size in the shader (rsx_fp_apply_unnorm_scale -- same as rsx_live_draw). */
++static u32 eng_unnorm_mask(u32 dim[][2])
+ {
+-    const u8* vp_uc = NULL;
+-    u32 vp_instrs = 0;
+-    const u32 start = rsx_dsp_vp_start(&g.rsx);
+-    if (start < RSX_DSP_VP_INSTR) {
+-        vp_uc = (const u8*)(g.rsx.vp + start * 4);
+-        vp_instrs = rsx_vp_program_size_instrs(
+-            vp_uc, (RSX_DSP_VP_INSTR - start) * 16u);
++    u32 mask = 0;
++    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
++        rsx_dsp_texture t;
++        rsx_dsp_get_texture(&g.rsx, u, &t);
++        dim[u][0] = dim[u][1] = 0;
++        if (!t.enabled || !(t.format & RSX_TEX_FMT_UNNORM) || !t.width || !t.height) continue;
++        mask |= 1u << u;
++        dim[u][0] = t.width; dim[u][1] = t.height;
++    }
++    return mask;
++}
++
 +/* Units whose TEXTURE_ADDRESS unsigned remap (bits 12-15) is BIASED: the
 + * unit returns 2x-1 (rsx_fp_biased_mask). */
 +static u32 eng_biased_mask(void)
@@ -11893,14 +11901,12 @@ index 5c50e4a..864ac24 100644
 +
 +static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
 +                              const u8** out_fp, u32* out_fp_size)
- {
-     const u8* vp_uc = NULL;
-     u32 vp_instrs = 0;
-     const u32 start = rsx_dsp_vp_start(&g.rsx);
-     if (start < RSX_DSP_VP_INSTR) {
-         vp_uc = (const u8*)(g.rsx.vp + start * 4);
--        vp_instrs = rsx_vp_program_size_instrs(
--            vp_uc, (RSX_DSP_VP_INSTR - start) * 16u);
++{
++    const u8* vp_uc = NULL;
++    u32 vp_instrs = 0;
++    const u32 start = rsx_dsp_vp_start(&g.rsx);
++    if (start < RSX_DSP_VP_INSTR) {
++        vp_uc = (const u8*)(g.rsx.vp + start * 4);
 +        /* The program only changes with an upload: size it once per
 +         * (upload generation, start slot), not on every draw. */
 +        if (g.vp_cache_gen != g.rsx.vp_gen + 1u || g.vp_cache_start != start) {
@@ -12231,8 +12237,7 @@ index 5c50e4a..864ac24 100644
 +            rsx_fp_apply_unnorm_scale(s_ps_hlsl, sizeof s_ps_hlsl, unnorm_mask,
 +                                      (const u32 (*)[2])unnorm_dim, cube_mask) < 0)
 +            fi = -1;
-     }
--    if (vi > 0 && fi > 0)
++    }
 +    /* RSX_FP_DEBUG_KEY=<hex pipeline key>: that pipeline's fragment program
 +     * returns its inputs instead of its colour, in 24-pixel screen stripes:
 +     * TEXCOORD1.xy (fract), unit 0 sampled there (rgb), COLOR0.rgb, and
@@ -12277,7 +12282,8 @@ index 5c50e4a..864ac24 100644
 +                 while (s_nskip < 512 && fgets(ln, sizeof ln, f)) {
 +                     u64 k = strtoull(ln, 0, 16); if (k) s_skip[s_nskip++] = k; }
 +                 fclose(f); }
-+    }
+     }
+-    if (vi > 0 && fi > 0)
 +    int key_drop = 0;
 +    for (int i = 0; i < s_nskip; i++) if (s_skip[i] == key) { key_drop = 1; break; }
 +    const int dbg_drop = (s_plimit >= 0 && (long)g.n_pipelines >= s_plimit) ||
