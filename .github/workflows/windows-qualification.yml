@@ -33,7 +33,7 @@ jobs:
       - name: Check exact contribution heads
         shell: pwsh
         env:
-          CONTRIBUTION: ${{ inputs.contribution || 'pal-launcher' }}
+          CONTRIBUTION: ${{ inputs.contribution || 'vulkan-race' }}
         run: |
           if ($env:CONTRIBUTION -eq 'stacked') {
             python qualification/windows.py update menu input graphs

@@ -14,7 +14,7 @@ HEADS = {
     'pal': 'b9c4788a250630a9c7deb798f570beea382bee6f',
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
-    'vulkan-race': 'b0732229cfc7c854868be303358b761e28007a63',
+    'vulkan-race': '1058d2268ec338293e550b283fb611adaf4c0f47',
     'update': 'fda78f1dcd301d1995933a43e30eb9513be2cc9b',
     'menu': '582dfbe026372cd1bfb4538cdfa922de426aba9c',
     'profiles': '54b65dcc71c9dca0e349a959a76a45784ad17839',
@@ -271,7 +271,7 @@ def check(name, sha):
             '-o', out / 'rsx_vulkan_backend.o')
         audio = sdk / 'libs/audio/cellAudio.c'
         object_file(sdk, audio, out / 'audio-wasapi.o')
-        run(*compiler(sdk), '-DPS3RECOMP_WIN_USE_SDL2=1',
+        run(*compiler(sdk), '-DPS3RECOMP_AUDIO_USE_SDL2=1',
             '-c', audio, '-o', out / 'audio-sdl.o')
         object_file(sdk, sdk / 'libs/video/rsx_draw_engine.c', out / 'draw-engine.o')
         summary(name, 'PASS Windows Vulkan backend, draw engine, and audio objects with WASAPI and SDL2.')
