@@ -34,6 +34,10 @@ SET UP
         to hand? Do step 2 first; then "Show EBOOT.BIN" in the launcher opens
         the folder it is in.
      d. RPCS3 writes EBOOT.elf next to it: pick that one.
+     If that menu item is missing, open PowerShell in the RPCS3 folder and
+     run the following with the path to your own dumped executable:
+       .\rpcs3.exe --decrypt "X:\PathToGame\PS3_GAME\USRDIR\EBOOT.BIN"
+     Then select the resulting EBOOT.elf in the RACiT launcher.
    Steps 2 and 3 work in either order.
 4. Play. Settings (display, graphics, controller) can be changed any time
    from the main menu, or in the game: F1, the touchpad on a DualSense, or
