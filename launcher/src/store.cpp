@@ -1356,6 +1356,10 @@ std::string Store::launch(void** process)
     if (!g.ok) return "The game is not ready: " + g.status;
     const BuildInfo b = current_build();
     if (!b.version) return "No build installed: reinstall the launcher.";
+    const fs::path eboot = g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf";
+    bool known = false;
+    const std::string elf_error = check_elf(eboot, &known, g.title_id);
+    if (!elf_error.empty()) return elf_error;
     std::error_code ec;
     fs::create_directories(hdd(), ec); fs::create_directories(cache(), ec);
     seed_caches(b);
@@ -1421,7 +1425,6 @@ std::string Store::launch(void** process)
     const fs::path exe = b.dir / game_program(g.title_id);
     if (!fs::exists(exe, ec))
         return "Build v" + std::to_string(b.version) + " has no program for " + g.title_id + ".";
-    const fs::path eboot = g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf";
     std::wstring cl = L"\"" + exe.wstring() + L"\" \"" + eboot.wstring() + L"\"";
     // An older build writes log.txt beside itself: clear the last one so a stale
     // file is never taken for this session's.
