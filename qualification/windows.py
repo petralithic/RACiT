@@ -10,6 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
+    'pal-launcher': '16a876c2134211b0369e97569ceef1fdba812dd1',
     'pal': 'b9c4788a250630a9c7deb798f570beea382bee6f',
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
@@ -152,6 +153,12 @@ def check(name, sha):
     run('git', 'cat-file', '-e', sha + '^{commit}', cwd=REPO)
     source = ROOT / (name + '-racit')
     archive(REPO, sha, source)
+    if name == 'pal-launcher':
+        run(ZIG, 'c++', '-target', 'x86_64-windows-gnu', '-std=c++17', '-O2',
+            '-municode', '-DUNICODE', '-D_UNICODE', '-c',
+            source / 'launcher/src/store.cpp', '-o', ROOT / 'pal-launcher-store.o')
+        summary(name, 'PASS Windows launcher store object with the import and Play checks.')
+        return
     if name == 'profiles':
         run(sys.executable, '-m', 'py_compile', source / 'scripts/patch_lift.py')
         invalid = ROOT / 'invalid-profile.elf'
