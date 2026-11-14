@@ -58,6 +58,9 @@ fi
 export RACACIT_OUT="$OUT" RACACIT_SPU_DIR="$SPU" RACACIT_PRX_DIR="$PRX"
 export RACACIT_ELF="$ELF" RACACIT_ELF_STEM="$(basename "${ELF%.*}")"
 mkdir -p "$OUT" "$RECOMP" "$SPU"
+if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ] && [ -f "$PROFILE_DIR/names.json" ]; then
+  cp "$PROFILE_DIR/names.json" "$OUT/names.json"
+fi
 
 echo "== 1/5 Loader"
 $PY "$PS3R/tools/ppu_loader.py" "$ELF" --output "$OUT"

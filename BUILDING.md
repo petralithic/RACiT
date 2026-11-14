@@ -58,7 +58,8 @@ With `SKIP_DESKTOP=1`, configure a separate Windows build directory and add
 `-DPRX_DIR="$PWD/out/BCUS98124-1.00/prx"` to the Windows CMake invocation.
 Standalone naming tools can read profile metadata by setting `RACACIT_OUT`
 to the profile directory, `RACACIT_ELF` to the source executable and
-`RACACIT_ELF_STEM` to its filename without the extension.
+`RACACIT_ELF_STEM` to its filename without the extension. A subsequent pipeline run
+uses that profile’s `names.json` for lifted source comments when available.
 
 ## Run your build
 
