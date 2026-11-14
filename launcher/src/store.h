@@ -91,7 +91,7 @@ public:
     // EBOOT.elf, the game's main program unlocked with RPCS3: checked, then put in
     // PS3_GAME\USRDIR -- or kept in data\ until the game is imported.
     // check_elf: "" = a PS3 program; *known = the program of a disc the build is made from.
-    static std::string check_elf(const fs::path& elf, bool* known);
+    static std::string check_elf(const fs::path& elf, bool* known, const std::string& expected_title = {});
     std::string add_elf(const fs::path& elf);
     fs::path pending_elf() const { return data() / L"EBOOT.elf"; }
     std::string refresh_art();          // ICON0.PNG / PIC1.PNG from PS3_GAME into assets\ (the game's own art)

@@ -286,7 +286,7 @@ std::string Store::import_iso(const fs::path& iso, Progress* p, std::string* sum
     return {};
 }
 
-std::string Store::check_elf(const fs::path& elf, bool* known)
+std::string Store::check_elf(const fs::path& elf, bool* known, const std::string& expected_title)
 {
     *known = false;
     const std::string h = read_text(elf, 64);
@@ -295,17 +295,23 @@ std::string Store::check_elf(const fs::path& elf, bool* known)
     if (h.size() < 20 || h.compare(0, 4, "\x7F" "ELF") != 0) return u8(elf.filename()) + " is not an ELF program.";
     if (h[4] != 2 || h[5] != 2 || (unsigned char)h[18] != 0 || (unsigned char)h[19] != 0x15) return u8(elf.filename()) + " is not a PS3 program.";
     const std::string sum = sha256_file(elf);
-    *known = sum == "406bded328d9dbdfa9684ed392554ca34c76f4ed95aa21685f622d3ab2b04592"     // BCUS98124
-          || sum == "6debdca0f181f35d98ebe23faabe2531b697c558b4e3384b06630173400674c1";   // BCES00511
+    std::string elf_title;
+    if (sum == "406bded328d9dbdfa9684ed392554ca34c76f4ed95aa21685f622d3ab2b04592")
+        elf_title = "BCUS98124";
+    else if (sum == "6debdca0f181f35d98ebe23faabe2531b697c558b4e3384b06630173400674c1")
+        elf_title = "BCES00511";
+    *known = !elf_title.empty();
+    if (*known && !expected_title.empty() && elf_title != expected_title)
+        return "This EBOOT.ELF is from " + elf_title + ", but the imported disc is " + expected_title + ".";
     return {};
 }
 
 std::string Store::add_elf(const fs::path& elf)
 {
     bool known = false;
-    std::string r = check_elf(elf, &known);
-    if (!r.empty()) return r;
     const GameInfo g = game();
+    std::string r = check_elf(elf, &known, g.title_id);
+    if (!r.empty()) return r;
     std::error_code ec;
     const bool have_game = fs::is_directory(g.root / L"PS3_GAME", ec);
     const fs::path to = have_game ? g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf" : pending_elf();
