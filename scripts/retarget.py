@@ -10,7 +10,7 @@ Addresses not in the map take the offset of the nearest lower one, with a warnin
 The copy's patch_lift.py stops the build if a hook did not land: most of its
 patches skip in silence when their target is not found.
 """
-import bisect, filecmp, json, os, re, shutil, subprocess, sys
+import bisect, filecmp, hashlib, json, os, re, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -142,6 +142,17 @@ def main():
         if not os.path.isfile(os.path.join(input_dir, name)):
             sys.exit('No %s in input/%s/' % (name, title))
 
+    # The copied sources use only the selected disc's guest addresses.
+    with open(os.path.join(ROOT, 'versions', 'profiles.json'), encoding='utf-8') as f:
+        manifest = json.load(f)
+    profile = next(p for p in manifest['profiles'] if p['title_id'] == title
+                   and p['app_version'] == '1.00')
+    with open(os.path.join(input_dir, 'EBOOT.ELF'), 'rb') as f:
+        checksum = hashlib.file_digest(f, 'sha256').hexdigest()
+    if checksum != profile['elf_sha256']:
+        sys.exit('Expected ' + profile['id'] + ' EBOOT.ELF; found SHA-256 ' + checksum
+                 + '. Retargeting stopped.')
+
     for top in COPY_DIRS:
         for folder, dirs, files in os.walk(os.path.join(ROOT, top)):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('build')]
@@ -152,11 +163,6 @@ def main():
                 if not os.path.exists(dst) or not filecmp.cmp(src, dst, shallow=False):
                     shutil.copy2(src, dst)
 
-    # The copied sources use only the selected disc's guest addresses.
-    with open(os.path.join(ROOT, 'versions', 'profiles.json'), encoding='utf-8') as f:
-        manifest = json.load(f)
-    profile = next(p for p in manifest['profiles'] if p['title_id'] == title
-                   and p['app_version'] == '1.00')
     profile['buildable'] = True
     profile['status'] = 'Retargeted disc source address layout'
     manifest['profiles'] = [profile]
