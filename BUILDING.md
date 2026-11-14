@@ -48,7 +48,9 @@ Set `RACACIT_PROFILE_OUTPUT=1` before running `scripts/pipeline.sh` to generate 
 `out/<profile>/`. The pipeline identifies the profile from the executable
 fingerprint, and publishes generated sources after the lift and patch passes
 succeed. The `recomp`, `spu` and `prx` directories in that profile are managed
-by the pipeline. Keep manually edited sources elsewhere.
+by the pipeline. Keep manually edited sources elsewhere. One pipeline run at a time
+can write each profile. If a forced termination leaves `.pipeline-lock` behind,
+confirm the build has exited before removing the lock directory.
 
 With `SKIP_DESKTOP=1`, configure a separate Windows build directory and add
 `-DRECOMP_DIR="$PWD/out/BCUS98124-1.00/recomp"`,

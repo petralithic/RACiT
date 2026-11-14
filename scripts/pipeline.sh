@@ -27,13 +27,24 @@ PY="${PY:-python3 -I}"
 if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
   PROFILE="$($PY "$ROOT/scripts/patch_lift.py" --identify-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}")"
   OUT="$ROOT/out/$PROFILE"
-  RECOMP="$OUT/recomp"
-  SPU="$OUT/spu"
-  PRX="$OUT/prx"
   BUILD="$OUT/build"
   mkdir -p "$OUT"
+  LOCK="$OUT/.pipeline-lock"
+  if ! mkdir "$LOCK"; then
+    echo "Could not lock $OUT for generation. Check for an active build before removing $LOCK." >&2
+    exit 1
+  fi
+  STAGE=
+  cleanup_profile() {
+    if [ -n "$STAGE" ]; then
+      rm -rf -- "$STAGE"
+    fi
+    rmdir -- "$LOCK"
+  }
+  trap cleanup_profile EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   STAGE="$(mktemp -d "$OUT/.lift.XXXXXXXX")"
-  trap 'rm -rf -- "$STAGE"' EXIT
   RECOMP="$STAGE/recomp"
   SPU="$STAGE/spu"
   PRX="$STAGE/prx"
@@ -128,6 +139,7 @@ if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
   RECOMP="$OUT/recomp"
   SPU="$OUT/spu"
   PRX="$OUT/prx"
+  export RACACIT_SPU_DIR="$SPU" RACACIT_PRX_DIR="$PRX"
 fi
 
 # SKIP_DESKTOP=1: lift only (Windows: the build is windows/, see README).
