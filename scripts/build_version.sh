@@ -13,7 +13,8 @@ export PATH="$ROOT/tools/venv/Scripts:$PATH"
 "$PYTHON" -I "$ROOT/scripts/retarget.py" "$TITLE"
 
 cd "$WORK"
-RACACIT_GAME_PROFILE="$TITLE-1.00" PYTHON_EXECUTABLE="$PYTHON" SKIP_DESKTOP=1 bash scripts/pipeline.sh
+RACACIT_GAME_PROFILE="$TITLE-1.00" PYTHON_EXECUTABLE="$PYTHON" \
+    LIBSRE="$WORK/input/libsre.prx" SKIP_DESKTOP=1 bash scripts/pipeline.sh "$WORK/input/EBOOT.ELF"
 cmake -S windows -B game/build-win -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="$WORK/windows/toolchain/zig-windows.cmake" \
     -DSDL2_DIR="$ROOT/tools/sdl2-win/lib/cmake/SDL2" \
