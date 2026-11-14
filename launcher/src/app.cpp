@@ -346,10 +346,11 @@ static void import_screen()
                                           "with the same name, and the launcher unlocks it.\n"
                                           "2. EBOOT.elf, the game's main program unlocked with RPCS3. Already in "
                                           "USRDIR? Then it is found by itself." });
-    scr.info.push_back({ "Making EBOOT.elf", "You must provide your own legally dumped copy of Ratchet & Clank Future: "
-                                             "A Crack in Time, and the EBOOT.elf file from your dump. If your EBOOT.elf "
-                                             "reads as encrypted, RPCS3 has a decryption tool available. RACiT does "
-                                             "not and will not assist with acquiring the .iso dump of the game." });
+    scr.info.push_back({ "Making EBOOT.elf",
+                         "In RPCS3, choose Utilities > Decrypt PS3 Binaries and select EBOOT.BIN from your own dump. "
+                         "If the menu item is missing, open PowerShell in the RPCS3 folder and run:\n"
+                         ".\\rpcs3.exe --decrypt \"X:\\PathToGame\\PS3_GAME\\USRDIR\\EBOOT.BIN\"\n"
+                         "Replace the example path with yours, then select the resulting EBOOT.elf below." });
     Item iso = button(have_game ? "1. Game found: import another .iso" : "1. Import the game: a .iso",
                       "Unpacks it into the launcher (about 25 GB)", [] {
         const fs::path p = pick_open_file(g_hwnd, L"Pick your A Crack in Time disc image", L"Disc image (*.iso)", L"*.iso");
