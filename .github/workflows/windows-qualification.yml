@@ -1,4 +1,4 @@
-name: Windows contribution checks
+name: Windows depth-copy check
 on:
   push:
     branches: [ci/windows-depth-copy]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: windows-contribution-qualification
+  group: windows-depth-copy
   cancel-in-progress: false
 jobs:
   components:
@@ -24,8 +24,8 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --require-hashes --only-binary=:all: --retries 3 --timeout 60 -r qualification/requirements-windows.txt
-      - name: Check exact contribution heads
+      - name: Check the standalone depth-copy commit
         shell: pwsh
         run: |
-          python qualification/windows.py water-interface
+          python qualification/windows.py
           exit $LASTEXITCODE
