@@ -10,7 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
-    'pal-launcher': '16a876c2134211b0369e97569ceef1fdba812dd1',
+    'pal-launcher': '2d368d5d4f940390ca9854b74fac39473fcae71b',
     'pal': 'b9c4788a250630a9c7deb798f570beea382bee6f',
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
@@ -154,10 +154,23 @@ def check(name, sha):
     source = ROOT / (name + '-racit')
     archive(REPO, sha, source)
     if name == 'pal-launcher':
-        run(ZIG, 'c++', '-target', 'x86_64-windows-gnu', '-std=c++17', '-O2',
-            '-municode', '-DUNICODE', '-D_UNICODE', '-c',
-            source / 'launcher/src/store.cpp', '-o', ROOT / 'pal-launcher-store.o')
-        summary(name, 'PASS Windows launcher store object with the import and Play checks.')
+        os.environ['ZIG_EXE'] = str(ZIG)
+        os.environ['PYTHON_EXE'] = Path(sys.executable).as_posix()
+        build = ROOT / 'launcher-sdl-build'
+        prefix = source / 'tools/sdl2-win'
+        toolchain = source / 'windows/toolchain/zig-windows.cmake'
+        run('cmake', '-S', SDL_SOURCE, '-B', build, '-G', 'Ninja',
+            '-DCMAKE_BUILD_TYPE=Release',
+            f'-DCMAKE_TOOLCHAIN_FILE={toolchain.as_posix()}',
+            f'-DCMAKE_INSTALL_PREFIX={prefix.as_posix()}',
+            '-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TEST=OFF')
+        run('cmake', '--build', build, '--target', 'install', '--parallel', '2')
+        run(Path(os.environ['ProgramFiles']) / 'Git/bin/bash.exe',
+            source / 'launcher/build.sh', cwd=source)
+        exe = source / 'launcher/build/RaCACiT Launcher.exe'
+        with exe.open('rb') as image:
+            assert image.read(2) == b'MZ'
+        summary(name, 'PASS full Windows launcher build with the PAL import and Play checks.')
         return
     if name == 'profiles':
         run(sys.executable, '-m', 'py_compile', source / 'scripts/patch_lift.py')
@@ -290,9 +303,9 @@ if __name__ == '__main__':
     ZIG = Path(ziglang.__file__).parent / 'zig.exe'
     run(ZIG, 'version')
     BASE = fetch('sdk', 'https://github.com/sp00nznet/ps3recomp.git', SDK)
-    sdl_source = fetch('sdl', 'https://github.com/libsdl-org/SDL.git', '5d249570393f7a37e037abf22cd6012a4cc56a71')
+    SDL_SOURCE = fetch('sdl', 'https://github.com/libsdl-org/SDL.git', '5d249570393f7a37e037abf22cd6012a4cc56a71')
     SDL = ROOT / 'sdl-include'
-    variant(sdl_source / 'include', SDL / 'SDL2', set())
+    variant(SDL_SOURCE / 'include', SDL / 'SDL2', set())
     VULKAN = fetch('vulkan', 'https://github.com/KhronosGroup/Vulkan-Headers.git', 'c46850864f4661461b0f6cb9922c058ffea4915e')
     failed = []
     SHADER_ONLY = sys.argv[1:] == ['water-shaders']
