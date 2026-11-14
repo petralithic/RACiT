@@ -15,6 +15,7 @@ HEADS = {
     'pal': 'b9c4788a250630a9c7deb798f570beea382bee6f',
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
+    'standalone-race': 'ade1d746baf33e9cf65dd3e44ccace103cd95bb1',
     'vulkan-race': '1058d2268ec338293e550b283fb611adaf4c0f47',
     'update': 'fda78f1dcd301d1995933a43e30eb9513be2cc9b',
     'menu': '582dfbe026372cd1bfb4538cdfa922de426aba9c',
@@ -286,7 +287,7 @@ def check(name, sha):
         (out / 'dxt_helpers.h').write_text(codec, encoding='utf-8')
         executable(sdk, 'atlas', out, fixture / 'atlas.cpp', extra=['-I', out, '-I', source / 'game'])
         summary(name, 'PASS actual pad/UI/prompt objects, mouse components and synthetic-atlas apply/restore checks.')
-    elif name in ('update', 'vulkan-race'):
+    elif name in ('update', 'vulkan-race', 'standalone-race'):
         run(*compiler(sdk), '-DPS3RECOMP_WIN_USE_SDL2=1',
             '-c', sdk / 'libs/video/rsx_vulkan_backend.c',
             '-o', out / 'rsx_vulkan_backend.o')

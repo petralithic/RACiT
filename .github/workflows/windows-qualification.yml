@@ -7,7 +7,7 @@ on:
       contribution:
         description: Focused component selection
         type: choice
-        options: [stacked, vulkan-race, audio-atomic, audio-rebase, pal, pal-launcher, launcher-import]
+        options: [stacked, vulkan-race, audio-atomic, audio-rebase, pal, pal-launcher, launcher-import, standalone-race]
         default: stacked
 permissions:
   contents: read
@@ -33,7 +33,7 @@ jobs:
       - name: Check exact contribution heads
         shell: pwsh
         env:
-          CONTRIBUTION: ${{ inputs.contribution || 'launcher-import' }}
+          CONTRIBUTION: ${{ inputs.contribution || 'standalone-race' }}
         run: |
           if ($env:CONTRIBUTION -eq 'stacked') {
             python qualification/windows.py update menu input graphs
