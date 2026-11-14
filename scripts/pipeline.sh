@@ -79,7 +79,7 @@ $PY "$ROOT/scripts/lift_spu_jobs.py" "$ELF" --extra
 # every module added to the list since ran in the SPU interpreter (v91: 109 of
 # 144, the AsyncMoby animation and FXVis effect modules among them).
 $PY "$ROOT/scripts/lift_spu_jobs.py" "$ELF" --sub
-$PY "$ROOT/scripts/patch_lift.py" || true
+$PY "$ROOT/scripts/patch_lift.py" "$RECOMP"
 
 # SKIP_DESKTOP=1: lift only (Windows: the build is windows/, see README).
 [ "${SKIP_DESKTOP:-0}" = 1 ] && { echo "Lifted: $RECOMP and $SPU"; exit 0; }
