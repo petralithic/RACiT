@@ -20098,7 +20098,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b7..4f26c75 100644
+index e2687b7..a78a34f 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -20116,7 +20116,7 @@ index e2687b7..4f26c75 100644
  
  #include "rsx_vulkan_backend.h"
  #include "rsx_vertex_fetch.h"
-@@ -52,13 +55,41 @@
+@@ -52,16 +55,44 @@
  #include "rsx_draw_engine.h"
  #include "vulkan/rsx_vk_fallback_vert.spv.h"
  #include "vulkan/rsx_vk_fallback_frag.spv.h"
@@ -20134,6 +20134,7 @@ index e2687b7..4f26c75 100644
   * opens the optional window. Same include style as those two. */
  #include <SDL2/SDL.h>
  #include <SDL2/SDL_vulkan.h>
++#include <stdio.h>
  
 -#include <dlfcn.h>
 +#ifdef _WIN32
@@ -20158,7 +20159,10 @@ index e2687b7..4f26c75 100644
 +#endif
  #include <stddef.h>
  #include <stdint.h>
- #include <stdio.h>
+-#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
 @@ -89,22 +120,24 @@
      X(vkCreateShaderModule) X(vkDestroyShaderModule) \
      X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
@@ -21719,6 +21723,8 @@ index e2687b7..4f26c75 100644
 +        vk_window_drop(why);
 +        return;
      }
+-
+-    if (vk_begin()) return;
 +    VkBool32 ok = VK_FALSE;
 +    if (pvkGetPhysicalDeviceSurfaceSupportKHR(s_vk.phys, s_vk.queue_family, s_vk.surface, &ok) != VK_SUCCESS || !ok) {
 +        vk_window_drop("the recreated surface cannot be presented from the graphics queue");
@@ -21727,8 +21733,7 @@ index e2687b7..4f26c75 100644
 +    VK_LOG("window surface recreated\n");
 +    vk_swapchain_rebuild();
 +}
- 
--    if (vk_begin()) return;
++
 +/* SUBOPTIMAL also comes back every frame when we deliberately present with
 + * an IDENTITY transform on a rotated panel (see vk_create_swapchain), so only
 + * rebuild when the surface size really changed. */
@@ -23173,7 +23178,7 @@ index e2687b7..4f26c75 100644
      if (vk_create_host_buffer(&st, (VkDeviceSize)tight * h, VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
 -        vk_destroy_buffer(&st); return;
 +        vk_destroy_buffer(&st); return -1;
-+    }
+     }
 +    /* A scaled image goes back to the guest's size first: the region is
 +     * stretched into a temporary of w x h (averaged for colour; depth is
 +     * point-sampled, as an average of depths is no depth at all). */
@@ -23182,7 +23187,7 @@ index e2687b7..4f26c75 100644
 +    if (scaled && vk_create_image(&down, o->fmt, w, h, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
 +                                  VK_IMAGE_ASPECT_COLOR_BIT)) {
 +        vk_destroy_image(&down); vk_destroy_buffer(&st); return -1;
-     }
++    }
 +    int rc = -1;
      if (!vk_begin()) {
          vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
