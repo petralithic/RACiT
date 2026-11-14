@@ -10,6 +10,7 @@ import time
 SDK = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 PATCH = 'patches/ps3recomp-0001-racacit-runtime-fixes.patch'
 HEADS = {
+    'pal': 'b9c4788a250630a9c7deb798f570beea382bee6f',
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
     'vulkan-race': 'b0732229cfc7c854868be303358b761e28007a63',
@@ -180,6 +181,19 @@ def check(name, sha):
         run(*compiler(sdk), '-DPS3RECOMP_AUDIO_USE_SDL2=1',
             '-c', audio, '-o', out / 'audio-sdl.o')
         summary(name, 'PASS patched audio source with Windows WASAPI and SDL2.')
+    elif name == 'pal':
+        # The loader needs only the function-table declarations from the lifter.
+        (out / 'ppu_recomp.h').write_text(
+            '#include "ppu_context.h"\n'
+            'struct func_entry { uint32_t addr; void (*func)(ppu_context*); };\n'
+            'extern const func_entry function_table[];\n'
+            'extern const uint64_t function_table_count;\n', encoding='utf-8')
+        for mode, defines in [('na', []), ('pal', ['-DRACACIT_BCES00511'])]:
+            run(*compiler(sdk), *defines, '-c', sdk / 'runtime/syscalls/sys_timer.c',
+                '-o', out / f'timer-{mode}.o')
+            run(*compiler(sdk, cpp=True), *defines, '-I', out, '-c',
+                sdk / 'runtime/ppu/ppu_loader.cpp', '-o', out / f'loader-{mode}.o')
+        summary(name, 'PASS Windows loader and timer objects for NA and PAL.')
     elif name == 'menu':
         # Match scripts/setup_windows.sh's existing official zlib pin.
         zlib = fetch('zlib', 'https://github.com/madler/zlib.git',
