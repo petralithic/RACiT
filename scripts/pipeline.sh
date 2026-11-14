@@ -131,9 +131,17 @@ if [ "${RACACIT_PROFILE_OUTPUT:-0}" = 1 ]; then
       [ -e "$entry" ] || continue
       dest="$target/${entry##*/}"
       if [ -d "$entry" ]; then
+        if [ -e "$dest" ] && [ ! -d "$dest" ]; then
+          rm -- "$dest"
+        fi
         publish_lift "$entry" "$dest"
-      elif ! cmp -s "$entry" "$dest"; then
-        mv -f -- "$entry" "$dest"
+      else
+        if [ -d "$dest" ]; then
+          rm -rf -- "$dest"
+        fi
+        if ! cmp -s "$entry" "$dest"; then
+          mv -f -- "$entry" "$dest"
+        fi
       fi
     done
   }
