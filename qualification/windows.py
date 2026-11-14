@@ -15,12 +15,12 @@ HEADS = {
     'audio-rebase': 'fab073695c614235936feb0d1cca8e5ab986cc43',
     'audio-atomic': 'b0732229cfc7c854868be303358b761e28007a63',
     'vulkan-race': 'b0732229cfc7c854868be303358b761e28007a63',
-    'update': 'f599c60ab1c005a1e5b3fe313f21d0fd07f760e3',
-    'menu': '961bfedfd8fd830da60059139b4fe689792243f1',
+    'update': 'fda78f1dcd301d1995933a43e30eb9513be2cc9b',
+    'menu': '582dfbe026372cd1bfb4538cdfa922de426aba9c',
     'profiles': '54b65dcc71c9dca0e349a959a76a45784ad17839',
     'stack': '34b12ccf8590872164e1e56a225db8e056890ead',
     'graphs': 'df5c64c10a1f935a86f6b253d6be5ac846338989',
-    'input': '16ba4938ef23e33ef0ee0732d676fcebfaeb7c92',
+    'input': 'ba2b34c4b64eb84c3e363e5bda158a9e604d346c',
     'water': 'a1064f3adf45a702b2bcda8d40ca32f4d87acb4b',
 }
 REPO = Path(__file__).resolve().parent.parent
