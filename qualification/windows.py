@@ -28,10 +28,10 @@ REPO = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ['RUNNER_TEMP']) / 'racit-components'
 
 
-def run(*args, cwd=None, capture=False):
+def run(*args, cwd=None, capture=False, timeout=1200):
     print('RUN', *map(str, args), flush=True)
     return subprocess.run(list(map(str, args)), cwd=cwd, check=True,
-                          text=True, capture_output=capture, timeout=1200)
+                          text=True, capture_output=capture, timeout=timeout)
 
 
 def archive(repo, rev, dest):
@@ -171,6 +171,26 @@ def check(name, sha):
         exe = source / 'launcher/build/RaCACiT Launcher.exe'
         with exe.open('rb') as image:
             assert image.read(2) == b'MZ'
+        if name == 'launcher-import':
+            smoke = ROOT / 'launcher-import-smoke'
+            smoke.mkdir()
+            player = smoke / exe.name
+            shutil.copy2(exe, player)
+            (smoke / 'launcher.ini').write_text('check_updates=0\n', encoding='ascii')
+            script = smoke / 'input.txt'
+            script.write_text('key DOWN\nkey DOWN\nkey DOWN\nwait 400\n'
+                              'key ENTER\nwait 400\nshot import-help.png\nquit\n',
+                              encoding='ascii')
+            os.environ['RACACIT_LAUNCHER_SCRIPT'] = str(script)
+            try:
+                run(player, cwd=smoke, timeout=30)
+            finally:
+                del os.environ['RACACIT_LAUNCHER_SCRIPT']
+            png = smoke / 'import-help.png'
+            with png.open('rb') as capture:
+                assert capture.read(8) == b'\x89PNG\r\n\x1a\n'
+            assert not script.read_text(encoding='ascii').strip()
+            print('Launcher consumed the setup, help capture and quit commands.', flush=True)
         summary(name, 'PASS full Windows launcher build through launcher/build.sh.')
         return
     if name == 'profiles':
