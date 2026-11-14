@@ -296,7 +296,8 @@ std::string Store::check_elf(const fs::path& elf, bool* known, const std::string
     if (h[4] != 2 || h[5] != 2 || (unsigned char)h[18] != 0 || (unsigned char)h[19] != 0x15) return u8(elf.filename()) + " is not a PS3 program.";
     const std::string sum = sha256_file(elf);
     std::string elf_title;
-    if (sum == "406bded328d9dbdfa9684ed392554ca34c76f4ed95aa21685f622d3ab2b04592")
+    if (sum == "406bded328d9dbdfa9684ed392554ca34c76f4ed95aa21685f622d3ab2b04592" ||
+        sum == "dd304912f85cb9afc344f4a0d4e071d05a08b2af8de216d458b26060417549ad")
         elf_title = "BCUS98124";
     else if (sum == "6debdca0f181f35d98ebe23faabe2531b697c558b4e3384b06630173400674c1")
         elf_title = "BCES00511";
