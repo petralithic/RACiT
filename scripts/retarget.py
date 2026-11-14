@@ -10,7 +10,7 @@ Addresses not in the map take the offset of the nearest lower one, with a warnin
 The copy's patch_lift.py stops the build if a hook did not land: most of its
 patches skip in silence when their target is not found.
 """
-import bisect, filecmp, os, re, shutil, subprocess, sys
+import bisect, filecmp, json, os, re, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -151,6 +151,18 @@ def main():
                 src, dst = os.path.join(folder, f), os.path.join(to, f)
                 if not os.path.exists(dst) or not filecmp.cmp(src, dst, shallow=False):
                     shutil.copy2(src, dst)
+
+    # The copied sources use only the selected disc's guest addresses.
+    with open(os.path.join(ROOT, 'versions', 'profiles.json'), encoding='utf-8') as f:
+        manifest = json.load(f)
+    profile = next(p for p in manifest['profiles'] if p['title_id'] == title
+                   and p['app_version'] == '1.00')
+    profile['buildable'] = True
+    profile['status'] = 'Retargeted disc source address layout'
+    manifest['profiles'] = [profile]
+    os.makedirs(os.path.join(work, 'versions'), exist_ok=True)
+    write_if_changed(os.path.join(work, 'versions', 'profiles.json'),
+                     json.dumps(manifest, indent=2) + '\n')
 
     r = Retarget(title)
     for name in ADDRESS_FILES:
