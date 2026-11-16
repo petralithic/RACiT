@@ -806,6 +806,7 @@ static DWORD WINAPI frame_clock(LPVOID)
 /* Derive the directory holding PS3_GAME from the EBOOT path
  * <root>/PS3_GAME/USRDIR/EBOOT.elf -> <root>. $PS3_VFS_ROOT overrides. */
 static char s_vfs_root[1024];
+extern bool racit_menu_archive_init();
 
 static void derive_vfs_root(const char* eboot)
 {
@@ -1557,6 +1558,7 @@ int main(int argc, char** argv)
     setenv("MVK_CONFIG_FAST_MATH_ENABLED", "0", 0);
     setenv("RACACIT_ASYNC_PIPELINES", "0", 0);
     setenv("RACACIT_HLE_SPURS", "1", 0);
+    setenv("RACACIT_KBM", "1", 0);
     setenv("PS3RECOMP_VK_WINDOW", "1", 0);
 #endif
 #ifdef __ANDROID__
@@ -1611,6 +1613,7 @@ int main(int argc, char** argv)
         ppu_inl_clip_hole = 1;
     }
 
+    if (!racit_menu_archive_init()) return 1;
     uint32_t entry = ppu_load_elf(argv[1]);
     if (!entry) {
         fprintf(stderr, "ERROR: could not load %s\n", argv[1]);

@@ -635,6 +635,7 @@ extern "C" uint32_t racacit_movie_update_hook(uint32_t slot, uint32_t playing)
  * the menu's first CardController goes straight to CreateMenu. The install
  * mode's cards (the HDD install and subtitle choice) are left alone.
  * -----------------------------------------------------------------------*/
+// Disc-only intro hook begins.
 void func_004C64C8(ppu_context* ctx);
 extern "C" void ps3_indirect_call(ppu_context* ctx);
 extern "C" void vm_write8(uint64_t a, uint8_t v);
@@ -680,6 +681,7 @@ extern "C" void racacit_front_end_cards(ppu_context* ctx)
     fprintf(stderr, "[front-end] startMode %s: %s = \"\" (intro cards skipped, RACACIT_SKIP_INTRO)%s\n",
             mode, nm, ok ? "" : " -- SetVariable said no");
 }
+// Disc-only intro hook ends.
 
 /* ---------------------------------------------------------------------------
  * Every cutscene skippable (RACACIT_ALL_CUTSCENES_SKIPPABLE, default on)
@@ -1211,7 +1213,7 @@ extern "C" volatile int g_racacit_watch_img;
 extern "C" volatile unsigned long long g_racacit_watch_t;
 static thread_local uint32_t t_watch_obj;
 /* The wait the main thread is in (its key), 0 = none: PS3_SAMPLE_INWAIT. */
-#if defined(__ANDROID__) || defined(__APPLE__)
+#ifndef _WIN32
 /* Defined by the Windows sampler (ppu_loader.cpp); here only this file uses it. */
 extern "C" { volatile uint32_t g_racacit_main_wait_lr = 0; }
 #else
@@ -1797,6 +1799,9 @@ extern "C" void racacit_snd_play_hook(ppu_context* ctx, int tag)
     __sync_lock_release(&mu);
 }
 
+// Disc-only 1.20 fixes begin.
+/* The 1.00 lift calls these at hand-placed hooks; update 1.20 already has the
+ * fixes, so its host sources (scripts/prepare_game_host.py) leave them out. */
 /* ---------------------------------------------------------------------------
  * Update 1.20's level heap budget in the disc build. func_0032C7A4, the level
  * loader, extends the level pool so a level gets at least a fixed budget past
@@ -1884,15 +1889,23 @@ extern "C" void racacit_u120_space_bits(ppu_context* ctx)
     memcpy(ctx->gpr, gpr, sizeof gpr); memcpy(ctx->fpr, fpr, sizeof fpr); memcpy(ctx->vr, vr, sizeof vr);
     ctx->cr = cr; ctx->lr = lr; ctx->ctr = ctr; ctx->xer = xer; ctx->fpscr = fpscr; ctx->vscr = vscr;
 }
+// Disc-only 1.20 fixes end.
 
 /* ---------------------------------------------------------------------------
- * Frame-rate unlock (docs/design/frame-unlock.md). The engine steps by real
- * elapsed time (g_clock, func_0066A424 Clock_Tick), clamped below by min_dt
- * (clock+0x04), which every level load sets to 1/60 s: above 60 FPS each
- * frame would still advance 1/60 s of game time. With RACACIT_FPS_CAP=<fps>
- * above 60, min_dt is lowered to 1/(2*cap) at every tick (which also undoes
- * the level-load reset and the frame end's 0.9*min_dt sleep). Off (unset or
- * <= 60): nothing changes. Every 5 s it logs game time against wall time.
+ * Frame-rate unlock, step 1: the game clock (patch_lift step 23).
+ *
+ * The engine steps by real elapsed time: Clock_Tick (func_0066A424, r3 =
+ * the clock at 0xF70D00) advances its timers by the timebase delta, clamped
+ * to [min_dt, max_dt] (clock+0x04 / +0x08). Every level load (func_0032AD18)
+ * sets min_dt to 1/60 s, so above 60 FPS each frame would still advance
+ * 1/60 s of game time and the game would run fast. The frame end also sleeps
+ * until 0.9 * min_dt has passed (a 66.7 FPS cap in the sync modes gameplay
+ * uses).
+ *
+ * RACACIT_FPS_CAP=<fps> above 60 lowers min_dt to 1/(2*cap) at every tick,
+ * which also undoes the level-load reset and shortens that sleep. Unset or
+ * <= 60, nothing changes. RACACIT_CLOCK_LOG=1 (or a cap) logs game time and
+ * real time against wall time every 5 s: both must stay 1.000.
  * -------------------------------------------------------------------------*/
 /* Frame-rate unlock: a frame counter at 60 per second of unpaused time for
  * the code that counts frames as time (docs/design/frame-unlock-audit.md
@@ -1966,6 +1979,7 @@ extern "C" void racacit_clock_tick(ppu_context* ctx)
             vm_read32(clk), 10);
     w0 = w; r0 = r; g0 = g; n0 = n;
 }
+
 /* Diagnostic: the sync mode func_00661650 sets (0..5; see the design doc). */
 extern "C" void racacit_sync_mode(ppu_context* ctx)
 {
@@ -1975,34 +1989,34 @@ extern "C" void racacit_sync_mode(ppu_context* ctx)
 }
 
 /* ---------------------------------------------------------------------------
- * Frame-rate unlock, step 2: the CPU frame limiter func_005C4C00 (sync mode
- * 0 states: menus, some cutscenes). It waits until a timebase deadline
- * (display+0x2D8; display = TOC-0x5120 -> -0x7FF8), then advances it by
- * f1 x display+0x20 (the refresh period, 1/59.94 s) x 79.8 MHz, or restarts
- * it from now if the frame was late; display+0x2E0 keeps the slack. With
- * RACACIT_FPS_CAP above 60 this replaces it at its head with the same logic
- * at a 1/cap period (f1 keeps the half-rate states at half rate) and a host
- * sleep instead of 50 us polls. Returns 0 (run the original) otherwise.
+ * Frame-rate unlock, step 3: the CPU frame limiter func_005C4C00 (1.20
+ * func_005C54A0). It waits until a timebase deadline at display+0x2D8
+ * (display = TOC-0x5120 -> -0x7FF8 on both versions), then advances it by
+ * f1 x display+0x20 (the refresh period, 1/59.94 s), or restarts it from now
+ * if the frame was late; display+0x2E0 keeps the slack. With RACACIT_FPS_CAP
+ * above 60 this replaces it at its head with the same logic at a 1/cap period
+ * (f1 keeps half-rate states at half rate) and a host sleep instead of the
+ * game's 50 us polls. Returns 0 (run the original) otherwise.
  * -------------------------------------------------------------------------*/
-#include <unistd.h>
+#include <thread>
 extern "C" uint64_t ppu_timebase_now(void);
 static uint64_t racacit_rd64(uint32_t ea) { return ((uint64_t)vm_read32(ea) << 32) | vm_read32(ea + 4u); }
 static void racacit_wr64(uint32_t ea, uint64_t v) { vm_write32(ea, (uint32_t)(v >> 32)); vm_write32(ea + 4u, (uint32_t)v); }
 extern "C" int racacit_frame_limit(ppu_context* ctx)
 {
-    static int cap = -1;
-    if (cap < 0) { const char* e = getenv("RACACIT_FPS_CAP"); cap = e ? atoi(e) : 0; }
+    const int cap = racacit_fps_cap();
     if (cap <= 60) return 0;
     const uint32_t disp = vm_read32(vm_read32((uint32_t)ctx->gpr[2] - 0x5120u) - 0x7FF8u);
-    const double f = ctx->fpr[1];
-    const uint64_t period = (uint64_t)(f / (double)cap * 79800000.0);
+    const uint64_t tb_hz = 79800000ull;
+    const uint64_t period = (uint64_t)(ctx->fpr[1] / (double)cap * (double)tb_hz);
     uint64_t now = ppu_timebase_now();
     uint64_t dl = racacit_rd64(disp + 0x2D8u);
     if (now < dl) {
         racacit_wr64(disp + 0x2E0u, dl - now);
         while (now < dl) {
-            const uint64_t left_us = (dl - now) * 1000000ull / 79800000ull;
-            if (left_us > 200) usleep((useconds_t)(left_us - 100));
+            const uint64_t left_us = (dl - now) * 1000000ull / tb_hz;
+            if (left_us > 200)
+                std::this_thread::sleep_for(std::chrono::microseconds(left_us - 100));
             now = ppu_timebase_now();
         }
         dl += period;

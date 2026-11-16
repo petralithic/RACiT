@@ -350,11 +350,14 @@ index 0000000..68a2795
 +
 +#endif /* AUDIO_STRETCH_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index b51fb7c..7d1986c 100644
+index b51fb7c..756468d 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
-@@ -15,10 +15,14 @@
+@@ -13,12 +13,17 @@
+  */
+ 
  #include "../../runtime/memory/vm.h"   /* vm_commit */
++#include "../../runtime/platform/win32_compat.h"
  #include "cellAudio.h"
  #include "../../runtime/ppu/ppu_memory.h"   /* vm_base, vm_read64, vm_write32 */
 +#include "audio_stretch.h"                  /* the output: no holes when the game is short */
@@ -368,15 +371,17 @@ index b51fb7c..7d1986c 100644
  #include <math.h>
  
  /* Event-queue push/lookup (runtime/syscalls/sys_event.c). Forward-declared
-@@ -122,6 +126,7 @@ typedef struct {
+@@ -122,6 +127,9 @@ typedef struct {
      float*               buffer;        /* host audio buffer (float samples) */
      u32                  buf_size;       /* buffer size in bytes */
      u64                  read_index;     /* current read position (block index) */
 +    u64                  pub_index;      /* the position the game sees (audio_pub_tick) */
++    unsigned             pub_steps;
++    unsigned             pub_finished_base;
      u64                  write_index;    /* where the game is writing */
      /* For address reporting to guest */
      u64                  port_addr;      /* guest-visible buffer address */
-@@ -140,6 +145,7 @@ static AudioNotifySlot s_notify_queues[CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES];
+@@ -140,6 +148,7 @@ static AudioNotifySlot s_notify_queues[CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES];
  
  /* Timestamp anchor for cellAudioGetPortTimestamp (microseconds, set at init) */
  static u64            s_audio_start_us = 0;
@@ -384,7 +389,7 @@ index b51fb7c..7d1986c 100644
  
  /* Mixing thread */
  static unsigned long long g_audio_dropped;   /* frames the device had no room for */
-@@ -154,8 +160,42 @@ static int           s_mix_thread_live = 0;
+@@ -154,8 +163,42 @@ static int           s_mix_thread_live = 0;
  static mutex_t       s_audio_mutex;
  
  /* Output mix buffer (stereo, one block worth) */
@@ -427,7 +432,7 @@ index b51fb7c..7d1986c 100644
  /* ---------------------------------------------------------------------------
   * Host audio output backend
   * -----------------------------------------------------------------------*/
-@@ -164,6 +204,248 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+@@ -164,6 +207,248 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
  
  static SDL_AudioDeviceID s_sdl_audio_dev = 0;
  
@@ -676,7 +681,7 @@ index b51fb7c..7d1986c 100644
  static int audio_backend_init(void)
  {
      if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
-@@ -188,6 +470,8 @@ static int audio_backend_init(void)
+@@ -188,6 +473,8 @@ static int audio_backend_init(void)
      }
  
      SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */
@@ -685,7 +690,7 @@ index b51fb7c..7d1986c 100644
      return 0;
  }
  
-@@ -201,18 +485,19 @@ static void audio_backend_shutdown(void)
+@@ -201,18 +488,19 @@ static void audio_backend_shutdown(void)
  
  static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
  {
@@ -707,7 +712,7 @@ index b51fb7c..7d1986c 100644
  }
  
  static void audio_backend_wait(void) { SDL_Delay(1); }
-@@ -225,6 +510,15 @@ static u32 audio_backend_queued_samples(void)
+@@ -225,6 +513,15 @@ static u32 audio_backend_queued_samples(void)
      return 0;
  }
  
@@ -723,7 +728,7 @@ index b51fb7c..7d1986c 100644
  #endif /* AUDIO_BACKEND_SDL2 */
  
  #if AUDIO_BACKEND_WASAPI
-@@ -373,7 +667,7 @@ static int audio_backend_room(void)
+@@ -373,7 +670,7 @@ static int audio_backend_room(void)
      if (FAILED(hr)) {
          /* Device gone (AUDCLNT_E_DEVICE_INVALIDATED on a default-device
           * change, sleep, ...): pace on the clock rather than spin. */
@@ -732,7 +737,7 @@ index b51fb7c..7d1986c 100644
              fprintf(stderr, "[cellAudio] GetCurrentPadding failed 0x%08lX -- clock pacing%c", (unsigned long)hr, 10);
          return -1;
      }
-@@ -408,10 +702,37 @@ static inline float ld_be_f32(const float* p)
+@@ -408,10 +705,37 @@ static inline float ld_be_f32(const float* p)
      return f;
  }
  
@@ -770,7 +775,7 @@ index b51fb7c..7d1986c 100644
  
      mutex_lock(&s_audio_mutex);
  
-@@ -445,15 +766,21 @@ static void audio_mix_one_block(void)
+@@ -445,15 +769,21 @@ static void audio_mix_one_block(void)
  
          /* Read one block at the current read_index */
          u32 block_idx = (u32)(port->read_index % nblock);
@@ -795,7 +800,7 @@ index b51fb7c..7d1986c 100644
                  char map[36]; u32 b;
                  for (b = 0; b < nblock && b < 32; b++) {
                      const float* bp = port->buffer + b * CELL_AUDIO_BLOCK_SAMPLES * nch;
-@@ -463,8 +790,8 @@ static void audio_mix_one_block(void)
+@@ -463,8 +793,8 @@ static void audio_mix_one_block(void)
                      map[b] = nz ? '#' : '.';
                  }
                  map[b] = 0;
@@ -806,7 +811,7 @@ index b51fb7c..7d1986c 100644
              } } }
  
          for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES; s++) {
-@@ -493,17 +820,37 @@ static void audio_mix_one_block(void)
+@@ -493,17 +823,37 @@ static void audio_mix_one_block(void)
              s_mix_buffer[s * 2 + 1] += right;
          }
  
@@ -846,7 +851,7 @@ index b51fb7c..7d1986c 100644
      }
  
      mutex_unlock(&s_audio_mutex);
-@@ -513,6 +860,137 @@ static void audio_mix_one_block(void)
+@@ -513,6 +863,137 @@ static void audio_mix_one_block(void)
          if (s_mix_buffer[i] > 1.0f) s_mix_buffer[i] = 1.0f;
          if (s_mix_buffer[i] < -1.0f) s_mix_buffer[i] = -1.0f;
      }
@@ -984,7 +989,7 @@ index b51fb7c..7d1986c 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -521,6 +999,15 @@ static void audio_mix_one_block(void)
+@@ -521,6 +1002,15 @@ static void audio_mix_one_block(void)
  
  static void audio_notify_event_queues(void)
  {
@@ -1000,7 +1005,7 @@ index b51fb7c..7d1986c 100644
      /* Push the audio-period event (data1 = CELL_AUDIO_EVENT_MIX = 0) to each
       * registered notify queue, so the game's audio loop (blocked on
       * sys_event_queue_receive) wakes once per block and writes the next one.
-@@ -528,17 +1015,116 @@ static void audio_notify_event_queues(void)
+@@ -528,17 +1018,115 @@ static void audio_notify_event_queues(void)
      for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
          if (!s_notify_queues[i].in_use) continue;
          uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
@@ -1011,9 +1016,11 @@ index b51fb7c..7d1986c 100644
                                         0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0);
 +            if (rc == 0) g_audio_push_ok++; else g_audio_push_fail++;
 +        } else g_audio_push_fail++;
-+    }
-+}
-+
+     }
+ }
+ 
+-#ifdef _WIN32
+-static unsigned __stdcall audio_mix_thread_func(void* arg)
 +/* The clock of what the game sees: one step per block in real time, with the
 + * period event its frame waits on. The step leans 1% to keep what is buffered
 + * (device queue + stretcher + finished unread blocks) near the target: the device's clock
@@ -1040,14 +1047,13 @@ index b51fb7c..7d1986c 100644
 +            if (done >= nblock) continue;
 +            /* Hold once at the lag threshold, then measure from this point.
 +             * Repeated holds at the same lag can starve the guest refill loop. */
-+            static unsigned s_steps[CELL_AUDIO_PORT_MAX], s_base[CELL_AUDIO_PORT_MAX];
 +            const unsigned finished = atomic_load_explicit(&s_finished[p], memory_order_relaxed);
-+            const int lag = (int)(s_steps[p] - (finished - s_base[p]));
++            const int lag = (int)(port->pub_steps - (finished - port->pub_finished_base));
 +            if (lag > max_lag) max_lag = lag;
 +            if (lag >= 6 || lag < -32)
-+                s_base[p] = finished - s_steps[p];
++                port->pub_finished_base = finished - port->pub_steps;
 +            if (lag >= 6) continue;
-+            s_steps[p]++;
++            port->pub_steps++;
 +            s_pub_steps++;
 +            port->pub_index++;
 +            if (port->read_idx_addr)
@@ -1064,8 +1070,8 @@ index b51fb7c..7d1986c 100644
 +        }
 +        t_next += step;
 +        audio_notify_event_queues();
-     }
- }
++    }
++}
 +#endif
 +
 +/* AUDIO_WAV=<file>: append the final mix as raw f32le stereo 48 kHz
@@ -1104,22 +1110,23 @@ index b51fb7c..7d1986c 100644
 +    return 1;
 +}
 +#endif
- 
- #ifdef _WIN32
- static unsigned __stdcall audio_mix_thread_func(void* arg)
++
++static void audio_mix_loop(void)
  {
-     (void)arg;
+-    (void)arg;
      printf("[cellAudio] Mixing thread started\n");
 +    /* It carries the clock the game's synth runs on (audio_pub_tick) and does
 +     * little else: a late wake here is a late read index for the whole game. */
++#ifdef _WIN32
 +    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
++#endif
 +#if AUDIO_BACKEND_SDL2
 +    ast_init(&s_st);
 +#endif
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
       * the old Sleep(2)/Sleep(5) loop keyed on a queue depth the 1056-frame
-@@ -550,6 +1136,22 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -550,6 +1138,22 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      unsigned long long blocks = 0;
      while (s_mix_thread_running) {
          const int room = audio_backend_room();
@@ -1142,7 +1149,7 @@ index b51fb7c..7d1986c 100644
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
          if (room < 0) {
              LARGE_INTEGER now; QueryPerformanceCounter(&now);
-@@ -573,11 +1175,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -573,11 +1177,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
                  float a = s_mix_buffer[i]; if (a < 0) a = -a; if (a > pk) pk = a; }
              if ((++_n % 200) == 0 || (pk > 0.001f && _n < 40))
                  fprintf(stderr, "[audio-peak] block#%u peak=%.4f\n", _n, pk); } }
@@ -1155,18 +1162,45 @@ index b51fb7c..7d1986c 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-@@ -610,6 +1208,10 @@ static void* audio_mix_thread_func(void* arg)
+@@ -600,35 +1200,28 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+     }
  
-     while (s_mix_thread_running) {
-         audio_mix_one_block();
-+        /* AUDIO_WAV=<file>: the final mix as raw f32le stereo 48 kHz (as on Windows). */
-+        { static FILE* _wf = (FILE*)-1;
-+          if (_wf == (FILE*)-1) { const char* e = getenv("AUDIO_WAV"); _wf = e ? fopen(e, "wb") : NULL; }
-+          if (_wf) { fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); fflush(_wf); } }
-         audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
-         audio_notify_event_queues();
+     printf("[cellAudio] Mixing thread stopped\n");
+-    return 0;
+ }
++
++#ifdef _WIN32
++static unsigned __stdcall audio_mix_thread_func(void* arg)
+ #else
+ static void* audio_mix_thread_func(void* arg)
++#endif
+ {
+     (void)arg;
+-    printf("[cellAudio] Mixing thread started\n");
+-
+-    while (s_mix_thread_running) {
+-        audio_mix_one_block();
+-        audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
+-        audio_notify_event_queues();
+-
+-        u32 queued = audio_backend_queued_samples();
+-        if (queued > CELL_AUDIO_BLOCK_SAMPLES * 4) {
+-            usleep(5000);
+-        } else {
+-            usleep(2000);
+-        }
+-    }
+-
+-    printf("[cellAudio] Mixing thread stopped\n");
++    audio_mix_loop();
++#ifdef _WIN32
++    return 0;
++#else
+     return NULL;
+-}
+ #endif
++}
  
-@@ -629,6 +1231,8 @@ static void* audio_mix_thread_func(void* arg)
  static int audio_start_mix_thread(void)
  {
      s_mix_thread_running = 1;
@@ -1175,7 +1209,7 @@ index b51fb7c..7d1986c 100644
  
  #ifdef _WIN32
      s_mix_thread = (HANDLE)_beginthreadex(NULL, 0, audio_mix_thread_func,
-@@ -699,15 +1303,9 @@ s32 cellAudioInit(void)
+@@ -699,15 +1292,9 @@ s32 cellAudioInit(void)
      }
  
  
@@ -1194,18 +1228,21 @@ index b51fb7c..7d1986c 100644
      if (audio_start_mix_thread() < 0) {
          printf("[cellAudio] WARNING: Could not start mixing thread\n");
      }
-@@ -785,7 +1383,10 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
+@@ -785,7 +1372,13 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
      port->param.nChannel = nch;
      port->param.nBlock   = nblk;
      port->read_index  = 0;
 +    port->pub_index   = 0;
      port->write_index = 0;
-+    s_port_done_seen[(int)(port - s_ports)] = 0;
-+    memset((void*)s_blk_done[(int)(port - s_ports)], 0, sizeof s_blk_done[0]);
++    const int slot = (int)(port - s_ports);
++    port->pub_steps = 0;
++    port->pub_finished_base = atomic_load_explicit(&s_finished[slot], memory_order_relaxed);
++    s_port_done_seen[slot] = 0;
++    memset((void*)s_blk_done[slot], 0, sizeof s_blk_done[0]);
  
      /* Allocate the audio buffer in GUEST memory so portAddr/readIndexAddr are
       * real guest addresses (the game's mixer -- FMOD here -- writes PCM there
-@@ -890,6 +1491,10 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -890,6 +1483,10 @@ s32 cellAudioPortStop(u32 portNum)
  
  s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  {
@@ -1216,7 +1253,7 @@ index b51fb7c..7d1986c 100644
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -907,8 +1512,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -907,8 +1504,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
          mutex_unlock(&s_audio_mutex);
          return CELL_AUDIO_ERROR_PARAM;
      }
@@ -1227,7 +1264,7 @@ index b51fb7c..7d1986c 100644
      mutex_unlock(&s_audio_mutex);
  
      vm_write64(tag_ea, t);
-@@ -917,6 +1522,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -917,6 +1514,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  
  s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
  {
@@ -1238,7 +1275,7 @@ index b51fb7c..7d1986c 100644
      uint32_t stamp_ea = (uint32_t)(uintptr_t)stamp;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -928,7 +1537,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
+@@ -928,7 +1529,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
          return CELL_AUDIO_ERROR_PARAM;
  
      mutex_lock(&s_audio_mutex);
@@ -1247,7 +1284,7 @@ index b51fb7c..7d1986c 100644
      mutex_unlock(&s_audio_mutex);
      if (tag > global_counter)
          return CELL_AUDIO_ERROR_TAG_NOT_FOUND;
-@@ -1074,7 +1683,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
+@@ -1074,7 +1675,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
      vm_write32(cfg + 24, port->buf_size);                                   /* portSize */
      vm_write32(cfg + 28, (u32)port->port_addr);                             /* portAddr */
  
@@ -2213,10 +2250,18 @@ index 1b6275d..847a541 100644
  {
      const u8* b = (const u8*)p;
 diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
-index 5166a47..8c83b67 100644
+index 5166a47..c82129b 100644
 --- a/libs/filesystem/cellFs.c
 +++ b/libs/filesystem/cellFs.c
-@@ -157,8 +157,13 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
+@@ -9,6 +9,7 @@
+ #include "../../runtime/platform/win32_backtrace.h"   /* RtlCaptureStackBackTrace / GetModuleHandleA on POSIX */
+ #include "ps3emu/endian.h"
+ #include <stdio.h>
++extern void racit_menu_archive_path(char* path, size_t capacity, int read_only);
+ #include <string.h>
+ #include <stdlib.h>
+ #include <sys/stat.h>
+@@ -157,8 +158,13 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
          return -1;
  
      const char* remainder = ps3_path + best_len;
@@ -2232,7 +2277,17 @@ index 5166a47..8c83b67 100644
  
      /* A mapped path with an empty remainder ends in a separator ("…/dev_hdd0/"),
       * and stat() rejects that on Windows -- so the directory a game asks about
-@@ -500,7 +505,7 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -422,6 +428,9 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+         return (s32)CELL_ENOENT;
+     }
+ 
++    racit_menu_archive_path(host_path, sizeof host_path,
++        (flags & (CELL_FS_O_ACCMODE | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND)) == CELL_FS_O_RDONLY);
++
+     /* If creating, ensure parent directories exist */
+     if (flags & CELL_FS_O_CREAT) {
+         ensure_parent_dirs(host_path);
+@@ -500,7 +509,7 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
      }
  
      { static int _n = 0;
@@ -2242,7 +2297,7 @@ index 5166a47..8c83b67 100644
                     (uint32_t)(uintptr_t)buf,
                     (unsigned long long)nbytes, (unsigned long long)bytes_read);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index f2b4c11..3c7aa36 100644
+index f2b4c11..6fddd42 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -12,11 +12,13 @@
@@ -2883,7 +2938,7 @@ index f2b4c11..3c7aa36 100644
  
          s_host_state[i].buttons = btns;
  
-@@ -356,26 +915,264 @@ static void pad_poll_sdl2(void)
+@@ -356,26 +915,260 @@ static void pad_poll_sdl2(void)
          s_host_state[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
          s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
          s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
@@ -2922,9 +2977,9 @@ index f2b4c11..3c7aa36 100644
 +    { "CIRCLE",   CELL_PAD_CTRL_CIRCLE,   "E,Backspace" },
 +    { "SQUARE",   CELL_PAD_CTRL_SQUARE,   "F" },
 +    { "TRIANGLE", CELL_PAD_CTRL_TRIANGLE, "Q" },
-+    { "L1",       CELL_PAD_CTRL_L1,       "Mouse3" },          /* strafe / aim (right mouse button) */
++    { "L1",       CELL_PAD_CTRL_L1,       "Left Ctrl" },          /* Left Ctrl */
 +    { "R1",       CELL_PAD_CTRL_R1,       "Mouse1" },          /* fire (left mouse button) */
-+    { "L2",       CELL_PAD_CTRL_L2,       "Left Ctrl" },
++    { "L2",       CELL_PAD_CTRL_L2,       "Mouse3" },
 +    { "R2",       CELL_PAD_CTRL_R2,       "Left Shift" },
 +    { "L3",       CELL_PAD_CTRL_L3,       "V" },
 +    { "R3",       CELL_PAD_CTRL_R3,       "Mouse2,B" },        /* middle mouse button */
@@ -2947,6 +3002,8 @@ index f2b4c11..3c7aa36 100644
 +/* An input: a scancode (< 512), or 512 + mouse button 1-5, or 520/521 the wheel. */
 +#define KB_MAX_KEYS 4
 +static int s_kb_keys[KB_N][KB_MAX_KEYS];
++static SDL_atomic_t s_racit_keyboard_prompts = {1};
++int racit_keyboard_prompts_active(void) { return SDL_AtomicGet(&s_racit_keyboard_prompts); }
 +static int s_kbm_on = -1;             /* allowed this run (PAD_NO_KEYBOARD) */
 +extern volatile int g_racacit_kbm_on;   /* rsx_host_ui.c: capture the mouse on a click */
 +
@@ -3013,6 +3070,7 @@ index f2b4c11..3c7aa36 100644
 +    hs->connected = 1;   /* with no controller the keyboard is the pad (pad_poll_sdl2 left it neutral) */
 +    u16 btns = 0;
 +    for (int k = 0; k < KB_N; k++) if (held[k] && k_kb[k].btn) btns |= k_kb[k].btn;
++    if (btns || dx || dy || wheel || mb || held[KB_LS_UP] || held[KB_LS_DOWN] || held[KB_LS_LEFT] || held[KB_LS_RIGHT]) SDL_AtomicSet(&s_racit_keyboard_prompts,1);
 +    hs->buttons |= btns;
 +    if (btns & CELL_PAD_CTRL_L2) hs->trigger_l2 = 255;
 +    if (btns & CELL_PAD_CTRL_R2) hs->trigger_r2 = 255;
@@ -3037,34 +3095,26 @@ index f2b4c11..3c7aa36 100644
 +     * a slow move still turns; smoothed over a few polls (mouse reports come
 +     * in bursts). */
 +    {
-+        static Uint64 last; static float sx, sy;
-+        const Uint64 now = SDL_GetPerformanceCounter();
-+        float dt = last ? (float)((double)(now - last) * 1000.0 / (double)SDL_GetPerformanceFrequency()) : 16.0f;   /* ms */
-+        last = now;
-+        if (dt < 1.0f) dt = 1.0f;
-+        if (dt > 50.0f) dt = 50.0f;
-+        float vx = 0.0f, vy = 0.0f;
-+        if (captured && (dx || dy)) {
-+            const float k = 0.11f * (float)opt.mouse_sens / 100.0f, dz = 0.22f;
-+            float ax = fabsf((float)dx) / dt * k, ay = fabsf((float)dy) / dt * k;
-+            if (ax > 0.0f) ax = dz + (1.0f - dz) * (ax > 1.0f ? 1.0f : ax);
-+            if (ay > 0.0f) ay = dz + (1.0f - dz) * (ay > 1.0f ? 1.0f : ay);
-+            vx = dx < 0 ? -ax : ax; vy = dy < 0 ? -ay : ay;
-+            if (opt.mouse_invert) vy = -vy;
-+        }
-+        sx += (vx - sx) * 0.6f; sy += (vy - sy) * 0.6f;
-+        if (fabsf(sx) < 0.02f) sx = 0.0f;
-+        if (fabsf(sy) < 0.02f) sy = 0.0f;
-+        float rx = sx, ry = sy;
++        struct RacitMouseState { uint64_t epoch_ns; int64_t dx,dy; float x,y; };
++        extern void racit_mouse_step(struct RacitMouseState*,uint64_t,int,int,int,float,int);
++        extern void racit_camera_feed(uint64_t,int,int,int,float,int);
++        extern int racit_camera_follow_active(uint64_t);
++        static struct RacitMouseState motion;
++        const uint64_t now_ns=(uint64_t)((double)SDL_GetPerformanceCounter()*1000000000.0/(double)SDL_GetPerformanceFrequency());
++        racit_mouse_step(&motion,now_ns,dx,dy,captured,(float)opt.mouse_sens,opt.mouse_invert);
++        racit_camera_feed(now_ns,dx,dy,captured,(float)opt.mouse_sens,opt.mouse_invert);
++        const int direct_follow=racit_camera_follow_active(now_ns);
++        float rx=direct_follow ? 0.0f : motion.x, ry=direct_follow ? 0.0f : motion.y;
 +        const float kx = (float)(held[KB_RS_RIGHT] - held[KB_RS_LEFT]), ky = (float)(held[KB_RS_DOWN] - held[KB_RS_UP]);
++        if (kx || ky) racit_camera_feed(now_ns,0,0,0,(float)opt.mouse_sens,opt.mouse_invert);
 +        if (!rx && !ry && (kx || ky)) { rx = kx * 0.8f; ry = ky * 0.8f; }
 +        if (rx || ry) {
 +            hs->analog_rx = (u8)(128.0f + 127.0f * (rx > 1.0f ? 1.0f : rx < -1.0f ? -1.0f : rx));
 +            hs->analog_ry = (u8)(128.0f + 127.0f * (ry > 1.0f ? 1.0f : ry < -1.0f ? -1.0f : ry));
 +        }
-     }
- }
- 
++    }
++}
++
 +static void pad_poll_sdl_fallbacks(void)
 +{
 +    /* On-screen touch controls drive port 0 while no gamepad is attached. */
@@ -3092,9 +3142,9 @@ index f2b4c11..3c7aa36 100644
 +        hs->press_up = (b & CELL_PAD_CTRL_UP) ? 255 : 0;  hs->press_down  = (b & CELL_PAD_CTRL_DOWN)  ? 255 : 0;
 +        hs->press_left = (b & CELL_PAD_CTRL_LEFT) ? 255 : 0; hs->press_right = (b & CELL_PAD_CTRL_RIGHT) ? 255 : 0;
 +        hs->press_l1 = (b & CELL_PAD_CTRL_L1) ? 255 : 0;  hs->press_r1 = (b & CELL_PAD_CTRL_R1) ? 255 : 0;
-+    }
-+}
-+
+     }
+ }
+ 
 +/* Extra controller mappings: gamecontrollerdb.txt (SDL's format, e.g. the
 + * community SDL_GameControllerDB file) next to the exe, in the working folder,
 + * or RACACIT_CONTROLLER_DB=<file>. SDL_GAMECONTROLLERCONFIG works too. SDL
@@ -3153,10 +3203,11 @@ index f2b4c11..3c7aa36 100644
 -        }
 -    }
 +    pad_sdl_attach();
++    SDL_AtomicSet(&s_racit_keyboard_prompts, s_sdl_controllers[0] == NULL);
  }
  
  static void pad_shutdown_backend(void)
-@@ -421,6 +1218,62 @@ static unsigned long long pad_now_ms(void)
+@@ -421,6 +1214,62 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -3219,7 +3270,7 @@ index f2b4c11..3c7aa36 100644
  static void pad_poll_backend(void)
  {
      /* Benign race: two threads may poll in the same tick. That costs one extra
-@@ -439,9 +1292,27 @@ static void pad_poll_backend(void)
+@@ -439,9 +1288,33 @@ static void pad_poll_backend(void)
  #elif PAD_BACKEND_SDL2
      pad_poll_sdl2();
  #endif
@@ -3241,6 +3292,12 @@ index f2b4c11..3c7aa36 100644
 +          s_host_state[i].sensor_x = s_host_state[i].sensor_y = s_host_state[i].sensor_z = s_host_state[i].sensor_g = 512;
 +      } }
 +#if PAD_BACKEND_SDL2
++    if (!ign) {
++        const PadHostState* h = &s_host_state[0];
++        if (h->connected && (h->buttons || h->analog_lx < 100 || h->analog_lx > 156 ||
++            h->analog_ly < 100 || h->analog_ly > 156 || h->analog_rx < 100 || h->analog_rx > 156 ||
++            h->analog_ry < 100 || h->analog_ry > 156)) SDL_AtomicSet(&s_racit_keyboard_prompts,0);
++    }
 +    pad_poll_kbm(ign);
 +#endif
 +    pad_note_human();
@@ -3248,7 +3305,7 @@ index f2b4c11..3c7aa36 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -466,6 +1337,14 @@ s32 cellPadInit(u32 max_connect)
+@@ -466,6 +1339,14 @@ s32 cellPadInit(u32 max_connect)
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
      memset(s_host_state, 0, sizeof(s_host_state));
@@ -3263,7 +3320,7 @@ index f2b4c11..3c7aa36 100644
  
      pad_init_backend();
  
-@@ -502,6 +1381,103 @@ void cellPad_poll(void)
+@@ -502,6 +1383,103 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -3367,7 +3424,7 @@ index f2b4c11..3c7aa36 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -518,6 +1494,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+@@ -518,6 +1496,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  
      /* Poll fresh state */
      pad_poll_backend();
@@ -3375,7 +3432,7 @@ index f2b4c11..3c7aa36 100644
  
      /* YDKJ_INJECT_PAD: the game's wait loop polls the pad (cellPadSetActDirect /
       * GetData) -- if it's parked on a "press button" prompt after loading, no
-@@ -601,7 +1578,7 @@ skip_inject: ;
+@@ -601,7 +1580,7 @@ skip_inject: ;
       * human at the pad. Env-gated test scaffolding, off by default. */
      { static int s_ap = -1; static unsigned s_apn = 0;
        if (s_ap < 0) s_ap = getenv("PAD_AUTOPRESS") ? 1 : 0;
@@ -3384,7 +3441,7 @@ index f2b4c11..3c7aa36 100644
            unsigned ph = s_apn++ % 240;
            if (ph < 12)
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= 0x40;   /* CROSS */
-@@ -636,7 +1613,7 @@ skip_inject: ;
+@@ -636,7 +1615,7 @@ skip_inject: ;
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
            }
        }
@@ -3393,7 +3450,7 @@ index f2b4c11..3c7aa36 100644
            double now = (double)(GetTickCount64() - t0) / 1000.0;
            /* Latch, do not window. A fixed time window is missed whenever the
             * title stops polling the pad for longer than the window (it does
-@@ -672,30 +1649,87 @@ skip_inject: ;
+@@ -672,30 +1651,87 @@ skip_inject: ;
       */
      { static int s_pf = -1; static char pf_path[512];
        static unsigned held_mask = 0; static int held_n = 0;
@@ -3492,7 +3549,7 @@ index f2b4c11..3c7aa36 100644
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
       * fixed positions. Rubber Ducky drives its camera from the sticks and never
-@@ -714,7 +1748,7 @@ skip_inject: ;
+@@ -714,7 +1750,7 @@ skip_inject: ;
                   sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
                   s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
                   s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
@@ -3501,7 +3558,7 @@ index f2b4c11..3c7aa36 100644
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
-@@ -725,7 +1759,7 @@ skip_inject: ;
+@@ -725,7 +1761,7 @@ skip_inject: ;
        { static int sw = -1; static clock_t t0 = 0;
          if (sw < 0) { const char* e = getenv("PAD_SWEEP");
                        sw = e ? atoi(e) : 0; if (sw < 0) sw = 0; }
@@ -3510,7 +3567,7 @@ index f2b4c11..3c7aa36 100644
              static const unsigned char steps[9][4] = {
                  {128,128,128,128},
                  {128,  0,128,128}, {128,255,128,128},
-@@ -793,10 +1827,40 @@ skip_inject: ;
+@@ -793,10 +1829,40 @@ skip_inject: ;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Y] = 399; /* gravity */
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Z] = 512;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_G] = 512;
@@ -3551,7 +3608,7 @@ index f2b4c11..3c7aa36 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -985,7 +2049,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -985,7 +2051,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -3560,7 +3617,7 @@ index f2b4c11..3c7aa36 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1082,13 +2146,61 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1082,13 +2148,61 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  #endif
  
  #if PAD_BACKEND_SDL2
@@ -8140,10 +8197,10 @@ index cdb0464..0742aa2 100644
  }
 diff --git a/libs/video/rsx_be_proxy.c b/libs/video/rsx_be_proxy.c
 new file mode 100644
-index 0000000..96a3833
+index 0000000..7b32a3f
 --- /dev/null
 +++ b/libs/video/rsx_be_proxy.c
-@@ -0,0 +1,880 @@
+@@ -0,0 +1,878 @@
 +/*
 + * ps3recomp - the draw engine's backend on its own thread (default; RSX_BACKEND_THREAD=0 = off)
 + *
@@ -8595,9 +8652,7 @@ index 0000000..96a3833
 +static void px_worker_loop(void)
 +{
 +    /* PS3_SAMPLE_BE=1: the sampler profiles this thread, as PS3_SAMPLE_RSX does the walker. */
-+#ifdef _WIN32
 +    { extern void ps3_samp_only_tid(unsigned long tid); if (getenv("PS3_SAMPLE_BE")) ps3_samp_only_tid(GetCurrentThreadId()); }
-+#endif
 +    { char _hb[160]; snprintf(_hb, sizeof _hb, "[hosttid] %lu rsx backend worker%c", (unsigned long)GetCurrentThreadId(), 10); fputs(_hb, stderr); }
 +    unsigned long long r = atomic_load_explicit(&s_r, memory_order_relaxed), w = r, r_pub = r;
 +    for (;;) {
@@ -19913,7 +19968,7 @@ index ad21361..bf55d13 100644
   * refs is rewritten in place with the unique prefix.  The occurrence map
   * remains valid until the next call using the same remap object. */
 diff --git a/libs/video/rsx_vp_decompiler.c b/libs/video/rsx_vp_decompiler.c
-index edd01d6..3d3233c 100644
+index edd01d6..31def54 100644
 --- a/libs/video/rsx_vp_decompiler.c
 +++ b/libs/video/rsx_vp_decompiler.c
 @@ -31,6 +31,7 @@
@@ -20015,7 +20070,7 @@ index edd01d6..3d3233c 100644
                           rhs, saturate ? " _v = saturate(_v);" : "");
                  emit(&b, line);
                  /* SCA writes the output register when the VEC unit does not
-@@ -605,11 +646,61 @@ static int rsx_vp_decompile_impl(
+@@ -605,11 +646,50 @@ static int rsx_vp_decompile_impl(
           * text came out NaN, which the FP's NaN guard turned into black. */
          /* Scalar logic per component: glslang's HLSL front end (the Metal
           * path) does not take || on vectors. */
@@ -20043,22 +20098,11 @@ index edd01d6..3d3233c 100644
 +         * Dekker's product from Veltkamp halves. Only multiplies and adds,
 +         * which Vulkan requires correctly rounded -- an FMA (mad) need not be
 +         * fused there, and an unfused one would make the error term wrong. */
-+#ifdef __APPLE__
-+        /* HLSL mad becomes SPIR-V Fma and then Metal fma(), which is fused
-+         * with a single rounding on every Apple GPU,
-+         * so the exact product error is one instruction there instead of the
-+         * Veltkamp split below. Same result; the split cost about a third of
-+         * the frame in vertex-heavy scenes through MoltenVK. */
-+        "float vp_mul_err(float a, float b, float p) {\n"
-+        "    precise float e = mad(a, b, -p);\n"
-+        "    return (a == 0.0 || b == 0.0) ? 0.0 : e; }\n"
-+#else
 +        "float vp_mul_err(float a, float b, float p) {\n"
 +        "    precise float ca = 4097.0 * a; precise float ah = ca - (ca - a); precise float al = a - ah;\n"
 +        "    precise float cb = 4097.0 * b; precise float bh = cb - (cb - b); precise float bl = b - bh;\n"
 +        "    precise float e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;\n"
 +        "    return (a == 0.0 || b == 0.0) ? 0.0 : e; }\n"
-+#endif
 +        /* (p, s) += a*b: p the running rounded sum, s the running error */
 +        "void vp_dot_step(inout float p, inout float s, float a, float b) {\n"
 +        "    precise float h = vp_mul1(a, b); precise float r = vp_mul_err(a, b, h);\n"
@@ -20080,7 +20124,7 @@ index edd01d6..3d3233c 100644
  
      for (u32 vtu = 0; vtu < 4; vtu++) {
          if (!((vtex_mask >> vtu) & 1u)) continue;
-@@ -642,7 +733,7 @@ static int rsx_vp_decompile_impl(
+@@ -642,7 +722,7 @@ static int rsx_vp_decompile_impl(
          }
      }
      emit(&o,
@@ -20089,7 +20133,7 @@ index edd01d6..3d3233c 100644
          "    [unroll] for (int _i=0;_i<32;_i++) r[_i]=(float4)0;\n"
          "    [unroll] for (int _j=0;_j<16;_j++) o[_j]=float4(0,0,0,1);\n"
          "    int4 a0 = (int4)0; int4 a1 = (int4)0;\n"
-@@ -659,7 +750,12 @@ static int rsx_vp_decompile_impl(
+@@ -659,7 +739,12 @@ static int rsx_vp_decompile_impl(
      emit(&o,
          "    VSOutput Out;\n"
          "    float4 _p = o[0];\n"
@@ -20120,7 +20164,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b7..5b8d86a 100644
+index e2687b7..e000e28 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -20138,7 +20182,7 @@ index e2687b7..5b8d86a 100644
  
  #include "rsx_vulkan_backend.h"
  #include "rsx_vertex_fetch.h"
-@@ -52,16 +55,45 @@
+@@ -52,16 +55,44 @@
  #include "rsx_draw_engine.h"
  #include "vulkan/rsx_vk_fallback_vert.spv.h"
  #include "vulkan/rsx_vk_fallback_frag.spv.h"
@@ -20157,7 +20201,6 @@ index e2687b7..5b8d86a 100644
   * opens the optional window. Same include style as those two. */
  #include <SDL2/SDL.h>
  #include <SDL2/SDL_vulkan.h>
-+#include <stdio.h>
  
 -#include <dlfcn.h>
 +#ifdef _WIN32
@@ -20186,7 +20229,7 @@ index e2687b7..5b8d86a 100644
  #include <stdlib.h>
  #include <string.h>
  
-@@ -89,22 +121,24 @@
+@@ -89,22 +120,24 @@
      X(vkCreateShaderModule) X(vkDestroyShaderModule) \
      X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
      X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) \
@@ -20215,7 +20258,7 @@ index e2687b7..5b8d86a 100644
  #define VK_WSI_DEVICE_FNS(X) \
      X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) \
      X(vkAcquireNextImageKHR) X(vkQueuePresentKHR)
-@@ -136,8 +170,9 @@ typedef struct vk_buffer {
+@@ -136,8 +169,9 @@ typedef struct vk_buffer {
  
  typedef struct vk_image {
      VkImage        img;
@@ -20226,7 +20269,7 @@ index e2687b7..5b8d86a 100644
  } vk_image;
  
  #define VK_SAMPLER_CACHE 32
-@@ -152,10 +187,21 @@ typedef struct vk_state {
+@@ -152,10 +186,21 @@ typedef struct vk_state {
      u32              queue_family;
      VkPhysicalDeviceMemoryProperties memprops;
  
@@ -20249,7 +20292,7 @@ index e2687b7..5b8d86a 100644
  
      VkRenderPass     render_pass;
      VkFramebuffer    framebuffer;
-@@ -168,6 +214,7 @@ typedef struct vk_state {
+@@ -168,6 +213,7 @@ typedef struct vk_state {
      VkSampler        sampler;
  
      vk_image         dummy;           /* 1x1 magenta: "nothing bound"    */
@@ -20257,7 +20300,7 @@ index e2687b7..5b8d86a 100644
      vk_image         tex[RSX_MAX_TEXTURES];   /* decoded guest textures  */
      int              tex_ready[RSX_MAX_TEXTURES];
      /* Guest path only: each unit's sampler, built from its wrap, filter and
-@@ -213,24 +260,50 @@ typedef struct vk_state {
+@@ -213,24 +259,44 @@ typedef struct vk_state {
  } vk_state;
  
  static vk_state s_vk;
@@ -20279,8 +20322,6 @@ index e2687b7..5b8d86a 100644
 +#ifndef PS3RECOMP_VULKAN_LOADER_PATH
 +#define PS3RECOMP_VULKAN_LOADER_PATH "libvulkan.1.dylib"
 +#endif
-+static const char* s_vk_apple_loaded_path;
-+
 +static const char* vk_apple_loader(void)
 +{
 +    const char* configured = getenv("PS3RECOMP_VULKAN_LIBRARY");
@@ -20296,21 +20337,16 @@ index e2687b7..5b8d86a 100644
 +    static const char* names[] = { "vulkan-1.dll" };
 +#else
      static const char* names[] = { "libvulkan.so.1", "libvulkan.so" };
--    for (size_t i = 0; i < sizeof names / sizeof names[0] && !s_vk.lib; i++)
 +#endif
-+    for (size_t i = 0; i < sizeof names / sizeof names[0] && !s_vk.lib; i++) {
+     for (size_t i = 0; i < sizeof names / sizeof names[0] && !s_vk.lib; i++)
          s_vk.lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
-+#ifdef __APPLE__
-+        if (s_vk.lib) s_vk_apple_loaded_path = names[i];
-+#endif
-+    }
      if (!s_vk.lib) {
 -        VK_LOG("no Vulkan loader found (dlopen libvulkan.so.1: %s)\n", dlerror());
 +        VK_LOG("no Vulkan loader found: %s\n", dlerror());
          return -1;
      }
      pvkGetInstanceProcAddr =
-@@ -273,6 +346,51 @@ static int vk_load_wsi_device_functions(void)
+@@ -273,6 +339,51 @@ static int vk_load_wsi_device_functions(void)
      return 0;
  }
  
@@ -20362,7 +20398,7 @@ index e2687b7..5b8d86a 100644
  /* ---------------------------------------------------------------------------
   * Device selection: PS3RECOMP_VK_DEVICE if set, else the first discrete GPU,
   * else integrated, else anything that is not a CPU rasteriser, else whatever
-@@ -379,10 +497,296 @@ static int vk_find_memory_type(u32 type_bits, VkMemoryPropertyFlags want, u32* o
+@@ -379,10 +490,296 @@ static int vk_find_memory_type(u32 type_bits, VkMemoryPropertyFlags want, u32* o
      return -1;
  }
  
@@ -20659,7 +20695,7 @@ index e2687b7..5b8d86a 100644
      VkImageCreateInfo ici = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
          .format = fmt, .extent = { w, h, 1 }, .mipLevels = levels, .arrayLayers = 1,
-@@ -390,106 +794,547 @@ static int vk_create_image_levels(vk_image* im, VkFormat fmt, u32 w, u32 h, u32
+@@ -390,106 +787,547 @@ static int vk_create_image_levels(vk_image* im, VkFormat fmt, u32 w, u32 h, u32
          .usage = usage, .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
          .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
      };
@@ -20947,8 +20983,7 @@ index e2687b7..5b8d86a 100644
 +}
 +
 +static void vk_bt_free_garbage(vk_bt_slot* sl)
- {
--    VK_CHECK(pvkResetCommandBuffer(s_vk.cmd, 0), "vkResetCommandBuffer");
++{
 +    for (u32 i = 0; i < sl->ngb; i++) {
 +        vk_garbage* g = &sl->gb[i];
 +        if (g->kind == 1) {
@@ -21083,7 +21118,8 @@ index e2687b7..5b8d86a 100644
 +
 +/* Open the current slot for recording (waiting out its previous use). */
 +static int vk_bt_open(void)
-+{
+ {
+-    VK_CHECK(pvkResetCommandBuffer(s_vk.cmd, 0), "vkResetCommandBuffer");
 +    if (s_bt.recording) return 0;
 +    vk_bt_slot* sl = &s_bt.s[s_bt.cur];
 +    if (vk_bt_wait_slot(sl)) return -1;
@@ -21238,7 +21274,7 @@ index e2687b7..5b8d86a 100644
  /* Order this command buffer's use of an image after everything submitted
   * before it; from UNDEFINED it is also the one-time move to GENERAL. */
  static void vk_barrier_image(VkImage img, VkImageAspectFlags aspect, VkImageLayout old_layout)
-@@ -501,7 +1346,8 @@ static void vk_barrier_image(VkImage img, VkImageAspectFlags aspect, VkImageLayo
+@@ -501,7 +1339,8 @@ static void vk_barrier_image(VkImage img, VkImageAspectFlags aspect, VkImageLayo
          .oldLayout = old_layout, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
          .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
          .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -21248,7 +21284,7 @@ index e2687b7..5b8d86a 100644
      };
      pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &b);
-@@ -588,6 +1434,14 @@ static VkSamplerAddressMode vk_gcm_wrap(u32 w)
+@@ -588,6 +1427,14 @@ static VkSamplerAddressMode vk_gcm_wrap(u32 w)
      }
  }
  
@@ -21263,7 +21299,7 @@ index e2687b7..5b8d86a 100644
  /* A unit's sampler from its registers, decoded as the Metal backend's
   * samp_slot_for does: SET_TEXTURE_FILTER min at [18:16] (1 NEAREST,
   * 2 LINEAR, 3..6 the four nearest/linear x nearest/linear-mip pairs), mag at
-@@ -622,7 +1476,7 @@ static VkSampler vk_unit_sampler(const rsx_texture_state* t)
+@@ -622,7 +1469,7 @@ static VkSampler vk_unit_sampler(const rsx_texture_state* t)
          .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
      };
      VkSampler smp = VK_NULL_HANDLE;
@@ -21272,7 +21308,7 @@ index e2687b7..5b8d86a 100644
      s_vk.samp_cache[s_vk.samp_count].key = key;
      s_vk.samp_cache[s_vk.samp_count].s   = smp;
      s_vk.samp_count++;
-@@ -715,6 +1569,27 @@ static void vk_cb_bind_texture(void* ud, u32 unit, const rsx_texture_state* t)
+@@ -715,6 +1562,27 @@ static void vk_cb_bind_texture(void* ud, u32 unit, const rsx_texture_state* t)
  /* ---------------------------------------------------------------------------
   * Render pass, framebuffer, pipelines
   * -------------------------------------------------------------------------*/
@@ -21300,7 +21336,7 @@ index e2687b7..5b8d86a 100644
  static int vk_pick_depth_format(void)
  {
      static const VkFormat candidates[] = {
-@@ -771,7 +1646,7 @@ static int vk_create_render_pass(void)
+@@ -771,7 +1639,7 @@ static int vk_create_render_pass(void)
                                      .renderPass = s_vk.render_pass, .attachmentCount = 2,
                                      .pAttachments = views, .width = s_vk.width,
                                      .height = s_vk.height, .layers = 1 };
@@ -21309,7 +21345,7 @@ index e2687b7..5b8d86a 100644
      return 0;
  }
  
-@@ -822,7 +1697,7 @@ static int vk_create_pipeline_objects(void)
+@@ -822,7 +1690,7 @@ static int vk_create_pipeline_objects(void)
                                  .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
                                  .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
                                  .maxLod = 0.0f };
@@ -21318,7 +21354,7 @@ index e2687b7..5b8d86a 100644
  
      /* A 1x1 magenta dummy keeps the descriptor valid before any bind --
       * the same "not bound" colour the null backend's sampler returns. */
-@@ -897,7 +1772,7 @@ static VkPipeline vk_get_pipeline(int ztest, int zwrite, u32 cmp)
+@@ -897,7 +1765,7 @@ static VkPipeline vk_get_pipeline(int ztest, int zwrite, u32 cmp)
          .pDynamicState = &dy, .layout = s_vk.pipe_layout, .renderPass = s_vk.render_pass,
          .subpass = 0 };
      VkPipeline p = VK_NULL_HANDLE;
@@ -21327,7 +21363,7 @@ index e2687b7..5b8d86a 100644
      if (r != VK_SUCCESS) { VK_LOG("vkCreateGraphicsPipelines failed (%d)\n", (int)r); return VK_NULL_HANDLE; }
      s_vk.pipelines[slot] = p;
      return p;
-@@ -1030,6 +1905,9 @@ static struct {
+@@ -1030,6 +1898,9 @@ static struct {
      char                  log[4096];
      VkDescriptorSetLayout set_layout;
      VkPipelineLayout      pipe_layout;
@@ -21337,7 +21373,7 @@ index e2687b7..5b8d86a 100644
      VkDescriptorPool      pool;
      VkDescriptorSet       set;
      vk_buffer             ubo;              /* VPConst at 0, PSConstants at ps_off */
-@@ -1238,7 +2116,7 @@ static VkPipeline vk_guest_pipeline(int vs, int fs, int ztest, int zwrite, u32 c
+@@ -1238,7 +2109,7 @@ static VkPipeline vk_guest_pipeline(int vs, int fs, int ztest, int zwrite, u32 c
          .pDynamicState = &dy, .layout = s_g.pipe_layout, .renderPass = s_vk.render_pass,
          .subpass = 0 };
      VkPipeline p = VK_NULL_HANDLE;
@@ -21346,7 +21382,7 @@ index e2687b7..5b8d86a 100644
      if (r != VK_SUCCESS) {
          VK_LOG("guest pipeline: vkCreateGraphicsPipelines failed (%d)\n", (int)r);
          return VK_NULL_HANDLE;
-@@ -1270,6 +2148,118 @@ static void vk_guest_tri(const rsx_state* st, u32 i0, u32 i1, u32 i2)
+@@ -1270,6 +2141,118 @@ static void vk_guest_tri(const rsx_state* st, u32 i0, u32 i1, u32 i2)
      vk_guest_push(st, i2);
  }
  
@@ -21465,7 +21501,7 @@ index e2687b7..5b8d86a 100644
  static int vk_guest_init(void)
  {
      if (!rsx_vulkan_backend_guest_programs()) return 0;
-@@ -1290,22 +2280,29 @@ static int vk_guest_init(void)
+@@ -1290,22 +2273,29 @@ static int vk_guest_init(void)
      }
  
      const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -21501,7 +21537,7 @@ index e2687b7..5b8d86a 100644
          { VK_DESCRIPTOR_TYPE_SAMPLER, RSX_MAX_TEXTURES },
      };
      VkDescriptorPoolCreateInfo pci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-@@ -1326,6 +2323,9 @@ static int vk_guest_init(void)
+@@ -1326,6 +2316,9 @@ static int vk_guest_init(void)
          VK_LOG("guest programs: no host-coherent uniform memory\n");
          return -1;
      }
@@ -21511,7 +21547,7 @@ index e2687b7..5b8d86a 100644
      s_g.on = 1;
      VK_LOG("guest programs: on (HLSL -> SPIR-V through glslang)\n");
      return 0;
-@@ -1333,6 +2333,7 @@ static int vk_guest_init(void)
+@@ -1333,6 +2326,7 @@ static int vk_guest_init(void)
  
  static void vk_guest_shutdown(void)
  {
@@ -21519,7 +21555,7 @@ index e2687b7..5b8d86a 100644
      if (s_vk.device) {
          for (u32 i = 0; i < s_g.pipe_count; i++)
              if (s_g.pipes[i].pipe) pvkDestroyPipeline(s_vk.device, s_g.pipes[i].pipe, NULL);
-@@ -1436,10 +2437,10 @@ static int vk_guest_draw(const rsx_state* st, u32 prim, u32 first, u32 count)
+@@ -1436,10 +2430,10 @@ static int vk_guest_draw(const rsx_state* st, u32 prim, u32 first, u32 count)
      VkWriteDescriptorSet w[4] = {
          { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s_g.set,
            .dstBinding = RSX_SPIRV_VPCONST_BINDING, .descriptorCount = 1,
@@ -21532,7 +21568,7 @@ index e2687b7..5b8d86a 100644
          { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s_g.set,
            .dstBinding = RSX_SPIRV_TEXTURE_BINDING, .descriptorCount = RSX_MAX_TEXTURES,
            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = ii },
-@@ -1457,12 +2458,14 @@ static int vk_guest_draw(const rsx_state* st, u32 prim, u32 first, u32 count)
+@@ -1457,12 +2451,14 @@ static int vk_guest_draw(const rsx_state* st, u32 prim, u32 first, u32 count)
                                    .renderArea = { { 0, 0 }, { s_vk.width, s_vk.height } } };
      pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
      pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -21549,7 +21585,7 @@ index e2687b7..5b8d86a 100644
      VkDeviceSize off = 0;
      pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &s_g.vertices.buf, &off);
      pvkCmdDraw(s_vk.cmd, (u32)s_g.cpu_count, 1, 0, 0);
-@@ -1502,6 +2505,7 @@ static void vk_draw(u32 prim, u32 first, u32 count)
+@@ -1502,6 +2498,7 @@ static void vk_draw(u32 prim, u32 first, u32 count)
                                    .renderArea = { { 0, 0 }, { s_vk.width, s_vk.height } } };
      pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
      pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -21557,22 +21593,21 @@ index e2687b7..5b8d86a 100644
      /* Whole target, as the null backend's ndc_to_px maps it. */
      VkViewport vp = { 0.0f, 0.0f, (float)s_vk.width, (float)s_vk.height, 0.0f, 1.0f };
      VkRect2D sc = { { 0, 0 }, { s_vk.width, s_vk.height } };
-@@ -1594,8 +2598,14 @@ static void vk_window_drop(const char* why)
+@@ -1594,8 +2591,11 @@ static void vk_window_drop(const char* why)
      }
      if (s_vk.surface && s_vk.instance && pvkDestroySurfaceKHR)
          pvkDestroySurfaceKHR(s_vk.instance, s_vk.surface, NULL);
-+#ifdef __APPLE__
+-    if (s_vk.window) {
+-        SDL_DestroyWindow(s_vk.window);
 +    if (s_vk.window) SDL_DestroyWindow(s_vk.window);
 +    if (s_vk.windowed) {
++#ifdef __APPLE__
 +        SDL_Vulkan_UnloadLibrary();
-+#else
-     if (s_vk.window) {
-         SDL_DestroyWindow(s_vk.window);
 +#endif
          SDL_QuitSubSystem(SDL_INIT_VIDEO);
      }
      s_vk.window = NULL;
-@@ -1609,15 +2619,41 @@ static void vk_window_drop(const char* why)
+@@ -1609,15 +2609,41 @@ static void vk_window_drop(const char* why)
  static void vk_window_open(const char* title)
  {
      if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;
@@ -21583,7 +21618,7 @@ index e2687b7..5b8d86a 100644
      }
 +#ifdef __APPLE__
 +    /* SDL and the renderer must use the same Vulkan loader. */
-+    if (SDL_Vulkan_LoadLibrary(s_vk_apple_loaded_path) != 0) {
++    if (SDL_Vulkan_LoadLibrary(vk_apple_loader()) != 0) {
 +        VK_LOG("Vulkan loader failed: %s\n", SDL_GetError());
 +        SDL_QuitSubSystem(SDL_INIT_VIDEO);
 +        return;
@@ -21615,7 +21650,7 @@ index e2687b7..5b8d86a 100644
      s_vk.windowed = 1;          /* so vk_window_drop also shuts SDL video down */
      if (!s_vk.window) {
          char why[256];
-@@ -1625,6 +2661,9 @@ static void vk_window_open(const char* title)
+@@ -1625,6 +2651,9 @@ static void vk_window_open(const char* title)
          vk_window_drop(why);
          return;
      }
@@ -21625,7 +21660,7 @@ index e2687b7..5b8d86a 100644
      unsigned n = 0;
      if (!SDL_Vulkan_GetInstanceExtensions(s_vk.window, &n, NULL) || n == 0 || n > 16 ||
          !SDL_Vulkan_GetInstanceExtensions(s_vk.window, &n, s_vk.inst_exts)) {
-@@ -1640,6 +2679,7 @@ static void vk_window_open(const char* title)
+@@ -1640,6 +2669,7 @@ static void vk_window_open(const char* title)
             SDL_GetCurrentVideoDriver(), n);
  }
  
@@ -21633,7 +21668,7 @@ index e2687b7..5b8d86a 100644
  static int vk_create_swapchain(void)
  {
      VkSurfaceCapabilitiesKHR caps;
-@@ -1675,6 +2715,22 @@ static int vk_create_swapchain(void)
+@@ -1675,6 +2705,22 @@ static int vk_create_swapchain(void)
      }
  
      VkExtent2D ext = caps.currentExtent;
@@ -21656,7 +21691,7 @@ index e2687b7..5b8d86a 100644
      if (ext.width == 0xFFFFFFFFu) {
          int w = 0, hh = 0;
          SDL_Vulkan_GetDrawableSize(s_vk.window, &w, &hh);
-@@ -1684,7 +2740,9 @@ static int vk_create_swapchain(void)
+@@ -1684,7 +2730,9 @@ static int vk_create_swapchain(void)
          if (ext.width  > caps.maxImageExtent.width)  ext.width  = caps.maxImageExtent.width;
          if (ext.height > caps.maxImageExtent.height) ext.height = caps.maxImageExtent.height;
      }
@@ -21667,7 +21702,7 @@ index e2687b7..5b8d86a 100644
  
      u32 count = caps.minImageCount + 1;
      if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
-@@ -1697,6 +2755,13 @@ static int vk_create_swapchain(void)
+@@ -1697,6 +2745,13 @@ static int vk_create_swapchain(void)
      for (size_t k = 0; k < 4; k++)
          if (caps.supportedCompositeAlpha & alphas[k]) { alpha = alphas[k]; break; }
  
@@ -21681,7 +21716,7 @@ index e2687b7..5b8d86a 100644
      VkSwapchainKHR old = s_vk.swapchain;
      VkSwapchainCreateInfoKHR sci = {
          .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-@@ -1705,8 +2770,8 @@ static int vk_create_swapchain(void)
+@@ -1705,8 +2760,8 @@ static int vk_create_swapchain(void)
          .imageExtent = ext, .imageArrayLayers = 1,
          .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
          .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -21692,7 +21727,7 @@ index e2687b7..5b8d86a 100644
          .clipped = VK_TRUE, .oldSwapchain = old,
      };
      VkSwapchainKHR sc = VK_NULL_HANDLE;
-@@ -1736,25 +2801,607 @@ static int vk_create_swapchain(void)
+@@ -1736,26 +2791,608 @@ static int vk_create_swapchain(void)
      return 0;
  }
  
@@ -21746,7 +21781,6 @@ index e2687b7..5b8d86a 100644
 +        vk_window_drop(why);
 +        return;
      }
--
 +    VkBool32 ok = VK_FALSE;
 +    if (pvkGetPhysicalDeviceSurfaceSupportKHR(s_vk.phys, s_vk.queue_family, s_vk.surface, &ok) != VK_SUCCESS || !ok) {
 +        vk_window_drop("the recreated surface cannot be presented from the graphics queue");
@@ -21755,7 +21789,8 @@ index e2687b7..5b8d86a 100644
 +    VK_LOG("window surface recreated\n");
 +    vk_swapchain_rebuild();
 +}
-+
+ 
+-    if (vk_begin()) return;
 +/* SUBOPTIMAL also comes back every frame when we deliberately present with
 + * an IDENTITY transform on a rotated panel (see vk_create_swapchain), so only
 + * rebuild when the surface size really changed. */
@@ -22309,10 +22344,11 @@ index e2687b7..5b8d86a 100644
 +        VK_LOG("vkAcquireNextImageKHR failed (VkResult %d)\n", (int)r); return;
 +    }
 +
-     if (vk_begin()) return;
++    if (vk_begin()) return;
      vk_barrier_image(s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
      VkImageMemoryBarrier b = {
-@@ -1766,62 +3413,361 @@ static void vk_present_window(void)
+         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+@@ -1766,62 +3403,354 @@ static void vk_present_window(void)
      };
      pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                            0, 0, NULL, 0, NULL, 1, &b);
@@ -22682,14 +22718,7 @@ index e2687b7..5b8d86a 100644
 +        static long s_every = -1;
 +        if (s_every < 0) { const char* e = getenv("PS3RECOMP_VK_DUMP_EVERY");
 +                           s_every = e ? atol(e) : 1; if (s_every < 1) s_every = 1; }
-+        int dump_this = s_vk.dump_path && (s_vk.presented % (u32)s_every) == 0;
-+        /* PS3RECOMP_VK_DUMP_GATE: decide before the readback, not after it --
-+         * a closed gate otherwise still pays a full-frame GPU copy and wait. */
-+        if (dump_this) {
-+            static const char* gate = (const char*)1;
-+            if (gate == (const char*)1) gate = getenv("PS3RECOMP_VK_DUMP_GATE");
-+            if (gate) { FILE* gf = fopen(gate, "rb"); if (!gf) dump_this = 0; else fclose(gf); }
-+        }
++        const int dump_this = s_vk.dump_path && (s_vk.presented % (u32)s_every) == 0;
 +        if (!dump_this && (s_vk.windowed || s_vk.dump_path)) {
 +            s_vk.presented++;
 +            s_g.last_draws = s_g.draws;
@@ -22702,7 +22731,7 @@ index e2687b7..5b8d86a 100644
  
      if (vk_begin()) return;
      vk_barrier_image(s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-@@ -1869,24 +3815,37 @@ static void vk_cb_present(void* ud, u32 buffer_id)
+@@ -1869,24 +3798,37 @@ static void vk_cb_present(void* ud, u32 buffer_id)
   * Pipelines, draws and textures are the next stages; until then
   * pipeline_create reports 0, which the engine caches as "cannot build".
   * -------------------------------------------------------------------------*/
@@ -22742,7 +22771,7 @@ index e2687b7..5b8d86a 100644
  static void vk_eng2_shutdown(void* user);
  
  static struct {
-@@ -1914,17 +3873,27 @@ static VkFormat vk_eng_format(rsx_be_format f, u32* bpp)
+@@ -1914,17 +3856,27 @@ static VkFormat vk_eng_format(rsx_be_format f, u32* bpp)
  
  static u32 vk_eng_alloc(void)
  {
@@ -22773,7 +22802,7 @@ index e2687b7..5b8d86a 100644
  }
  
  /* Copy `rows` rows of `w` texels from host memory into one level / layer of
-@@ -1933,22 +3902,31 @@ static int vk_eng_upload_rows(VkImage img, u32 layer, u32 mip, u32 w, u32 h,
+@@ -1933,22 +3885,31 @@ static int vk_eng_upload_rows(VkImage img, u32 layer, u32 mip, u32 w, u32 h,
                                size_t tight, u32 rows, const void* src, u32 row_bytes)
  {
      if (tight > row_bytes) tight = row_bytes;
@@ -22819,7 +22848,7 @@ index e2687b7..5b8d86a 100644
      return rc;
  }
  
-@@ -1981,15 +3959,54 @@ static VkComponentMapping vk_remap(u32 remap, u32 rsx_fmt)
+@@ -1981,15 +3942,54 @@ static VkComponentMapping vk_remap(u32 remap, u32 rsx_fmt)
                               vk_remap_sel(sel[3]), vk_remap_sel(sel[0]) };
      return m;
  }
@@ -22879,7 +22908,7 @@ index e2687b7..5b8d86a 100644
  }
  
  static int vk_eng_init(void* user, u32 width, u32 height)
-@@ -2005,19 +4022,39 @@ static void vk_eng_release(void* user, u32 handle)
+@@ -2005,19 +4005,39 @@ static void vk_eng_release(void* user, u32 handle)
      (void)user;
      if (!handle || handle >= VK_ENG_MAX_OBJ || s_eobj[handle].kind == VK_ENG_FREE) return;
      if (s_eobj[handle].kind == VK_ENG_COLOR)
@@ -22924,7 +22953,7 @@ index e2687b7..5b8d86a 100644
      memset(&s_eobj[handle], 0, sizeof s_eobj[handle]);
  }
  
-@@ -2025,69 +4062,151 @@ static void vk_eng_shutdown(void* user)
+@@ -2025,69 +4045,151 @@ static void vk_eng_shutdown(void* user)
  {
      vk_eng2_shutdown(user);
      for (u32 i = 1; i < VK_ENG_MAX_OBJ; i++) vk_eng_release(user, i);
@@ -23104,7 +23133,7 @@ index e2687b7..5b8d86a 100644
      return hd;
  }
  
-@@ -2116,20 +4235,24 @@ static void vk_eng_clear_color(void* user, u32 surface, const float rgba[4])
+@@ -2116,20 +4218,24 @@ static void vk_eng_clear_color(void* user, u32 surface, const float rgba[4])
      VkImageSubresourceRange r = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
      vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
      pvkCmdClearColorImage(s_vk.cmd, o->im.img, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &r);
@@ -23136,7 +23165,7 @@ index e2687b7..5b8d86a 100644
  }
  
  /* The named surface becomes the frame: blit it onto the display image, then
-@@ -2138,6 +4261,29 @@ static void vk_eng_present(void* user, u32 surface)
+@@ -2138,6 +4244,29 @@ static void vk_eng_present(void* user, u32 surface)
  {
      (void)user;
      vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
@@ -23166,7 +23195,7 @@ index e2687b7..5b8d86a 100644
      if (o && !vk_begin()) {
          vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
          vk_barrier_image(s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-@@ -2151,29 +4297,70 @@ static void vk_eng_present(void* user, u32 surface)
+@@ -2151,29 +4280,70 @@ static void vk_eng_present(void* user, u32 surface)
                          s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL, 1, &blit,
                          (o->w == s_vk.width && o->h == s_vk.height) ? VK_FILTER_NEAREST
                                                                      : VK_FILTER_LINEAR);
@@ -23244,7 +23273,7 @@ index e2687b7..5b8d86a 100644
          VkBufferMemoryBarrier hb = {
              .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
-@@ -2182,13 +4369,15 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -2182,13 +4352,15 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
          };
          pvkCmdPipelineBarrier(s_vk.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                                0, 0, NULL, 1, &hb, 0, NULL);
@@ -23262,7 +23291,7 @@ index e2687b7..5b8d86a 100644
  }
  
  /* ---- E3: textures ---------------------------------------------------------
-@@ -2200,45 +4389,38 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -2200,45 +4372,38 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
  static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
                                   u32 mips, u32 faces, u32 remap, u32 rsx_fmt)
  {
@@ -23321,7 +23350,7 @@ index e2687b7..5b8d86a 100644
      return hd;
  fail:
      vk_destroy_image(&o->im);
-@@ -2251,22 +4433,24 @@ static void vk_eng_texture_upload(void* user, u32 texture, u32 face, u32 mip, u3
+@@ -2251,22 +4416,24 @@ static void vk_eng_texture_upload(void* user, u32 texture, u32 face, u32 mip, u3
  {
      (void)user;
      vk_eng_obj* o = vk_eng_get(texture, VK_ENG_TEXTURE);
@@ -23351,7 +23380,7 @@ index e2687b7..5b8d86a 100644
              return i;
      const u32 hd = vk_eng_alloc();
      if (!hd) return 0;
-@@ -2274,8 +4458,9 @@ static u32 vk_eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_forma
+@@ -2274,8 +4441,9 @@ static u32 vk_eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_forma
      if (vk_eng_make_view(t->im.img, t->fmt, 1, vk_remap(remap, rsx_format), &o->im.view)) {
          memset(o, 0, sizeof *o); return 0;
      }
@@ -23362,7 +23391,7 @@ index e2687b7..5b8d86a 100644
      return hd;
  }
  /* ---- E4: depth snapshots --------------------------------------------------
-@@ -2288,50 +4473,164 @@ static u32 vk_eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_forma
+@@ -2288,50 +4456,164 @@ static u32 vk_eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_forma
   * Each depth target keeps ONE snapshot texture (its handle in `surface`),
   * refilled on every request, so nothing accumulates however often the engine
   * invalidates and asks again; it goes when the depth target goes. */
@@ -23542,7 +23571,7 @@ index e2687b7..5b8d86a 100644
          VkBufferImageCopy out = { .imageSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 },
                                    .imageExtent = { w, h, 1 } };
          pvkCmdCopyImageToBuffer(s_vk.cmd, z->im.img, VK_IMAGE_LAYOUT_GENERAL, st.buf, 1, &out);
-@@ -2345,11 +4644,172 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -2345,11 +4627,172 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
          VkBufferImageCopy in = { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
                                   .imageExtent = { w, h, 1 } };
          pvkCmdCopyBufferToImage(s_vk.cmd, st.buf, t->im.img, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
@@ -23717,7 +23746,7 @@ index e2687b7..5b8d86a 100644
  /* ---- E2: pipelines and draws ---------------------------------------------
   * A pipeline handle carries the two translated modules and the render state
   * the engine keyed it on. Topology is not part of that key (Metal sets it on
-@@ -2364,22 +4824,59 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -2364,22 +4807,59 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
   * samplers s0..s3 would alias the pixel samplers' binding), FP16 and other
   * non-RGBA8 colour targets, depth-only passes, and stencil (the depth format
   * has no stencil aspect yet, so the test is inert). */
@@ -23779,7 +23808,7 @@ index e2687b7..5b8d86a 100644
      struct { u32 key[RSX_BE_MAX_COLOR_TARGETS + 1]; VkFramebuffer fb; } fb[VK_ENG_FB_CACHE];
      u32          fb_count;
      vk_image     scratch_depth;                          /* when no zeta is bound */
-@@ -2395,34 +4892,131 @@ static struct {
+@@ -2395,34 +4875,131 @@ static struct {
      u32          stencil_ref;
      vk_buffer    indices;
      u32          warned;
@@ -23922,7 +23951,7 @@ index e2687b7..5b8d86a 100644
              .initialLayout = VK_IMAGE_LAYOUT_GENERAL, .finalLayout = VK_IMAGE_LAYOUT_GENERAL };
          if (i < n) cref[i] = (VkAttachmentReference){ i, VK_IMAGE_LAYOUT_GENERAL };
      }
-@@ -2433,9 +5027,22 @@ static VkRenderPass vk_eng_render_pass(u32 n)
+@@ -2433,9 +5010,22 @@ static VkRenderPass vk_eng_render_pass(u32 n)
      VkRenderPassCreateInfo rci = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
                                     .attachmentCount = n + 1, .pAttachments = att,
                                     .subpassCount = 1, .pSubpasses = &sub };
@@ -23948,7 +23977,7 @@ index e2687b7..5b8d86a 100644
  }
  
  /* Tables carried from the Metal backend, itself copied from the D3D12 live
-@@ -2454,6 +5061,10 @@ static VkBlendFactor vk_gcm_blend_factor(u32 f)
+@@ -2454,6 +5044,10 @@ static VkBlendFactor vk_gcm_blend_factor(u32 f)
      case 0x0306: return VK_BLEND_FACTOR_DST_COLOR;
      case 0x0307: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
      case 0x0308: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
@@ -23959,7 +23988,7 @@ index e2687b7..5b8d86a 100644
      default:     return VK_BLEND_FACTOR_ONE;
      }
  }
-@@ -2495,16 +5106,34 @@ static VkStencilOpState vk_gcm_stencil_face(u32 func, u32 fail, u32 zfail, u32 z
+@@ -2495,16 +5089,34 @@ static VkStencilOpState vk_gcm_stencil_face(u32 func, u32 fail, u32 zfail, u32 z
      return s;
  }
  
@@ -23996,7 +24025,7 @@ index e2687b7..5b8d86a 100644
      return pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;
  }
  
-@@ -2512,10 +5141,18 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+@@ -2512,10 +5124,18 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
                                    const rsx_be_render_state* rs, const rsx_vertex_layout_plan* layout,
                                    u32 vertex_stride, rsx_be_format rt_fmt, u32 rt_count)
  {
@@ -24016,7 +24045,7 @@ index e2687b7..5b8d86a 100644
          if (!(s_e2.warned & 1u)) { VK_LOG("engine: colour format %d not supported yet\n", (int)rt_fmt); s_e2.warned |= 1u; }
          return 0;
      }
-@@ -2523,17 +5160,22 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+@@ -2523,17 +5143,22 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
      if (rt_count > RSX_BE_MAX_COLOR_TARGETS) rt_count = RSX_BE_MAX_COLOR_TARGETS;
      u32 slot = VK_ENG_MAX_PIPE;
      for (u32 i = 0; i < VK_ENG_MAX_PIPE; i++) if (!s_epipe[i].used) { slot = i; break; }
@@ -24042,7 +24071,7 @@ index e2687b7..5b8d86a 100644
      P->used = 1;
      return slot + 1u;
  }
-@@ -2543,109 +5185,663 @@ static void vk_eng_pipeline_release(void* user, u32 pipeline)
+@@ -2543,109 +5168,661 @@ static void vk_eng_pipeline_release(void* user, u32 pipeline)
      (void)user;
      if (!pipeline || pipeline > VK_ENG_MAX_PIPE || !s_epipe[pipeline - 1].used) return;
      vk_eng_pipe* P = &s_epipe[pipeline - 1];
@@ -24688,10 +24717,8 @@ index e2687b7..5b8d86a 100644
 +    }
 +    SDL_LockMutex(s_ap.mu);
 +    const int ok = s_ap.tail - s_ap.head < VK_AP_QUEUE;
-+    if (ok) {
-+              vk_eng_pipe* P = &s_epipe[pipe_index];
-+              P->skipped[t] = 1;
-+              P->build_ms[t] = 0;
++    if (ok) { vk_eng_pipe* P = &s_epipe[pipe_index];
++              P->skipped[t] = 1; P->build_ms[t] = 0;
 +              SDL_AtomicSet(&P->pend[t], 1);
 +              SDL_AtomicAdd(&s_ap.active, 1);
 +              s_ap.q[s_ap.tail % VK_AP_QUEUE].pipe = pipe_index; s_ap.q[s_ap.tail % VK_AP_QUEUE].topo = t;
@@ -24767,7 +24794,7 @@ index e2687b7..5b8d86a 100644
      }
      return P->variant[topo_idx];
  }
-@@ -2654,15 +5850,20 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
+@@ -2654,15 +5831,20 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
  
  static void vk_eng2_shutdown(void* user)
  {
@@ -24790,7 +24817,7 @@ index e2687b7..5b8d86a 100644
  }
  
  /* Constants go straight into the shared UBO: vertex at 0, pixel at ps_off.
-@@ -2673,8 +5874,11 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
+@@ -2673,8 +5855,11 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
      if (!s_g.on || !data) { s_e2.vs_bytes = 0; return; }
      const u32 cap = (u32)s_g.ps_off;
      if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 2u)) { VK_LOG("engine: VS constants truncated\n"); s_e2.warned |= 2u; } }
@@ -24803,7 +24830,7 @@ index e2687b7..5b8d86a 100644
  }
  static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
  {
-@@ -2682,17 +5886,31 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
+@@ -2682,17 +5867,31 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
      if (!s_g.on || !data) { s_e2.ps_bytes = 0; return; }
      const u32 cap = (u32)(s_g.ubo.size - s_g.ps_off);
      if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 4u)) { VK_LOG("engine: PS constants truncated\n"); s_e2.warned |= 4u; } }
@@ -24838,7 +24865,7 @@ index e2687b7..5b8d86a 100644
      }
      s_e2.tex_mask = mask;
  }
-@@ -2713,6 +5931,11 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
+@@ -2713,6 +5912,11 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
      s_e2.sc[0] = x; s_e2.sc[1] = y; s_e2.sc[2] = w; s_e2.sc[3] = h; s_e2.have_sc = 1;
  }
  static void vk_eng_set_stencil_ref(void* user, u32 ref) { (void)user; s_e2.stencil_ref = ref; }
@@ -24850,7 +24877,7 @@ index e2687b7..5b8d86a 100644
  
  static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, VkImageView dview,
                                          u32 dkey, u32 w, u32 h)
-@@ -2730,7 +5953,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
+@@ -2730,7 +5934,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
                                      .renderPass = rp, .attachmentCount = n + 1, .pAttachments = views,
                                      .width = w, .height = h, .layers = 1 };
      VkFramebuffer fb = VK_NULL_HANDLE;
@@ -24859,7 +24886,7 @@ index e2687b7..5b8d86a 100644
      memcpy(s_e2.fb[s_e2.fb_count].key, key, sizeof key);
      s_e2.fb[s_e2.fb_count++].fb = fb;
      return fb;
-@@ -2744,19 +5967,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
+@@ -2744,19 +5948,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
          return s_e2.scratch_depth.view;
      vk_eng_drop_framebuffers();
      vk_destroy_image(&s_e2.scratch_depth);
@@ -24965,7 +24992,7 @@ index e2687b7..5b8d86a 100644
  static int vk_eng_ensure_indices(VkDeviceSize bytes)
  {
      if (s_e2.indices.buf && s_e2.indices.size >= bytes) return 0;
-@@ -2777,23 +6082,62 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
+@@ -2777,23 +6063,62 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
                    | ((u64)d->mip_present << 3) | ((u64)(d->wrap_s & 0xF) << 4)
                    | ((u64)(d->wrap_t & 0xF) << 8) | ((u64)(d->wrap_r & 0xF) << 12)
                    | ((u64)(lo >> 16) << 16) | ((u64)(hi >> 16) << 32);
@@ -25036,7 +25063,7 @@ index e2687b7..5b8d86a 100644
      return smp;
  }
  
-@@ -2807,67 +6151,474 @@ static VkImageView vk_eng_sample_view(u32 handle)
+@@ -2807,67 +6132,474 @@ static VkImageView vk_eng_sample_view(u32 handle)
                 ? o->im.view : VK_NULL_HANDLE;
  }
  
@@ -25416,8 +25443,8 @@ index e2687b7..5b8d86a 100644
 +        }
 +        return;
 +    }
-+}
-+
+ }
+ 
 +/* RSX_ENG_STATS=1: which way each engine draw left vk_eng_draw (printed with
 + * the engine's own line). Most exits here are silent. */
 +static u64 s_vk_draw_exit[9];
@@ -25447,8 +25474,8 @@ index e2687b7..5b8d86a 100644
 +            s_sync_calls[6], s_sync_calls[7], s_sync_calls[8], s_sync_calls[9], s_sync_calls[10], 10);
 +    memset(s_sync_calls, 0, sizeof s_sync_calls);
 +    memset(s_vkc, 0, sizeof s_vkc);
- }
- 
++}
++
 +static u32 s_draw_geom;          /* vk_eng_draw_cached's block for the vk_eng_draw it calls */
  static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices, u32 vertex_count,
                          u32 stride, const u32* indices, u32 index_count)
@@ -25533,7 +25560,7 @@ index e2687b7..5b8d86a 100644
      if (vk_ensure_vertex_buffer(vbytes)) return;
      memcpy(s_vk.vertices.ptr, vertices, (size_t)vbytes);
      if (indices && index_count) {
-@@ -2880,30 +6631,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2880,30 +6612,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      /* Everything submitted before is complete (each submission is waited
       * on); this orders memory for the surfaces this draw touches. */
      for (u32 i = 0; i < n; i++)
@@ -25571,7 +25598,7 @@ index e2687b7..5b8d86a 100644
      VkDeviceSize off = 0;
      pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &s_vk.vertices.buf, &off);
      if (indices && index_count) {
-@@ -2916,6 +6655,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2916,6 +6636,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      vk_submit_and_wait();
  }
  
@@ -25600,7 +25627,7 @@ index e2687b7..5b8d86a 100644
  static const rsx_draw_backend s_vk_engine_backend = {
      .user                 = NULL,
      .init                 = vk_eng_init,
-@@ -2930,6 +6691,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2930,6 +6672,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .depth_target_create  = vk_eng_depth_target_create,
      .depth_target_release = vk_eng_release,
      .depth_snapshot       = vk_eng_depth_snapshot,
@@ -25614,7 +25641,7 @@ index e2687b7..5b8d86a 100644
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
      .bind_targets         = vk_eng_bind_targets,
-@@ -2941,6 +6709,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2941,6 +6690,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .set_viewport         = vk_eng_set_viewport,
      .set_scissor          = vk_eng_set_scissor,
      .set_stencil_ref      = vk_eng_set_stencil_ref,
@@ -25623,13 +25650,9 @@ index e2687b7..5b8d86a 100644
      .draw                 = vk_eng_draw,
      .clear_color          = vk_eng_clear_color,
      .clear_depth_stencil  = vk_eng_clear_depth_stencil,
-@@ -2969,8 +6739,33 @@ static int vk_init_all(u32 width, u32 height, const char* title)
-     s_vk.height = height ? height : 720;
+@@ -2970,6 +6721,26 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      s_vk.dump_path = getenv("PS3RECOMP_VK_DUMP");
  
-+#ifdef __APPLE__
-+    if (vk_load_library()) return -1;
-+#endif
      vk_window_open(title);           /* no-op unless PS3RECOMP_VK_WINDOW is set */
 +    /* The window opened at the guest's size; the image the frame is composed
 +     * in follows the internal resolution, so a higher one reaches the screen
@@ -25651,13 +25674,10 @@ index e2687b7..5b8d86a 100644
 +    { unsigned u = 0, b = 0;             /* the engine's texture budget follows the card's */
 +      extern unsigned g_rsx_vram_budget_mb;
 +      if (!vk_vram_mb(&u, &b) && b) g_rsx_vram_budget_mb = b; }
-+#ifndef __APPLE__
      if (vk_load_library()) return -1;
-+#endif
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                               .pApplicationName = "ps3recomp", .pEngineName = "ps3recomp RSX",
-@@ -2981,11 +6776,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2981,11 +6752,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          ci.enabledExtensionCount   = s_vk.inst_ext_count;
          ci.ppEnabledExtensionNames = s_vk.inst_exts;
      }
@@ -25693,7 +25713,7 @@ index e2687b7..5b8d86a 100644
          ir = pvkCreateInstance(&ci, NULL, &s_vk.instance);
      }
      if (ir != VK_SUCCESS) { VK_LOG("vkCreateInstance failed (VkResult %d)\n", (int)ir); return -1; }
-@@ -3004,25 +6823,97 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3004,25 +6799,97 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          vk_window_drop("no device can present to the window");
          if (vk_pick_device()) return -1;
      }
@@ -25795,7 +25815,7 @@ index e2687b7..5b8d86a 100644
      if (vk_load_device_functions()) return -1;
      if (s_vk.windowed && vk_load_wsi_device_functions())
          vk_window_drop("the driver has no swapchain functions");
-@@ -3039,11 +6930,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3039,11 +6906,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      VK_CHECK(pvkAllocateCommandBuffers(s_vk.device, &cai, &s_vk.cmd), "vkAllocateCommandBuffers");
      VkFenceCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
      VK_CHECK(pvkCreateFence(s_vk.device, &fci, NULL, &s_vk.fence), "vkCreateFence");
@@ -25812,7 +25832,7 @@ index e2687b7..5b8d86a 100644
      if (vk_create_image(&s_vk.depth, s_vk.depth_format, s_vk.width, s_vk.height,
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) return -1;
-@@ -3097,13 +6992,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -3097,13 +6968,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
       * pipeline from the guest's programs, so without them it has nothing to
       * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
@@ -25829,7 +25849,7 @@ index e2687b7..5b8d86a 100644
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
             s_vk.width, s_vk.height, (int)s_vk.depth_format, title ? title : "");
      return 0;
-@@ -3125,7 +7021,9 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3125,7 +6997,9 @@ void rsx_vulkan_backend_shutdown(void)
      }
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
@@ -25839,7 +25859,7 @@ index e2687b7..5b8d86a 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -3145,6 +7043,7 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3145,6 +7019,7 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -25847,7 +25867,7 @@ index e2687b7..5b8d86a 100644
          if (s_vk.fence) pvkDestroyFence(s_vk.device, s_vk.fence, NULL);
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          pvkDestroyDevice(s_vk.device, NULL);
-@@ -3160,9 +7059,10 @@ int rsx_vulkan_backend_pump_messages(void)
+@@ -3160,9 +7035,10 @@ int rsx_vulkan_backend_pump_messages(void)
      if (!s_vk.windowed) return 0;
      int quit = 0;
      SDL_Event e;
@@ -25859,7 +25879,7 @@ index e2687b7..5b8d86a 100644
      }
      return quit ? -1 : 0;
  }
-@@ -3186,4 +7086,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
+@@ -3186,4 +7062,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
      return s_vk.eng_active ? rsx_draw_engine_guest_draws() : s_g.last_draws;
  }
  
@@ -26748,24 +26768,23 @@ index 11a7480..2251ce0 100644
      for (unsigned i = 0; i < 8 * sizeof mask && i < CPU_SETSIZE; i++)
          if (mask & ((DWORD_PTR)1 << i)) CPU_SET(i, &set);
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index e8f6c2b..6159d43 100644
+index e8f6c2b..1f2d90a 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
-@@ -18,6 +18,13 @@
+@@ -18,8 +18,12 @@
  #include "ps3emu/nid.h"      /* ps3_compute_nid */
  #include "ps3emu/guest_call.h" /* ps3_invoke_guest: AIO completion is a guest OPD */
  #include "sdata_decrypt.h"   /* SDATA/EDAT (NPD) decryption for cellFsSdataOpen */
-+#ifdef __APPLE__
 +#include <zlib.h>   /* PSARC manifests (DualSense routing) */
-+#else
-+#include "../../../zlib/zlib.h"   /* PSARC manifests (DualSense routing) */
-+#endif
 +#include <string>
 +#include <vector>
  #include <stdint.h>
  #include <stdio.h>
++extern "C" void racit_menu_archive_path(char* path, size_t capacity, int read_only);
  #include <string.h>
-@@ -145,13 +152,65 @@ static void host_path(char* out, size_t cap, const char* guest)
+ #include <stdlib.h>
+ #include <sys/stat.h>
+@@ -145,13 +149,65 @@ static void host_path(char* out, size_t cap, const char* guest)
      snprintf(out, cap, "%s/%s", ppu_vfs_root, rel);
      for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
      ps3_vfs_ps3game_fallback(out, cap);
@@ -26832,7 +26851,16 @@ index e8f6c2b..6159d43 100644
  static DIR*  g_dirs[FS_MAX];
  static char  g_dir_path[FS_MAX][1024];   /* host path per open dir (for readdir stat) */
  
-@@ -206,9 +265,20 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -174,6 +230,8 @@ static void cellFsOpen(ppu_context* ctx)
+     uint32_t flags  = (uint32_t)ctx->gpr[4];
+     uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
+     host_path(hpath, sizeof hpath, gpath);
++    racit_menu_archive_path(hpath, sizeof hpath,
++        (flags & (3u | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND)) == CELL_FS_O_RDONLY);
+ 
+     /* NPDRM: see the note in sys_fs.c -- an EDAT is decrypted once into a cache
+      * file and that is opened in its place. */
+@@ -206,9 +264,20 @@ static void cellFsOpen(ppu_context* ctx)
              return;
          }
      }
@@ -26853,7 +26881,7 @@ index e8f6c2b..6159d43 100644
          ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
      }
      const char* fmode = (acc == CELL_FS_O_RDWR)
-@@ -230,6 +300,9 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -230,6 +299,9 @@ static void cellFsOpen(ppu_context* ctx)
       * movies) is diagnosed from the opener: its sibling read path is the one
       * that is not running. */
      if (fd >= 0 && fd < FS_MAX) { strncpy(g_fd_path[fd], gpath, sizeof g_fd_path[fd]-1); g_fd_path[fd][sizeof g_fd_path[fd]-1]=0; }
@@ -26863,7 +26891,7 @@ index e8f6c2b..6159d43 100644
      { char who[64] = "?";
        if (getenv("FS_CALLER")) { ppu_guest_caller(who, sizeof who);
            fprintf(stderr, "[fs] open '%s' -> fd %d  (opened by %s)\n", gpath, fd, who);
-@@ -371,6 +444,361 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
+@@ -371,6 +443,361 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
      p[len - 1] = p[len - 1];
  }
  
@@ -27225,7 +27253,7 @@ index e8f6c2b..6159d43 100644
  static void cellFsRead(ppu_context* ctx)
  {
      int fd          = (int)(uint32_t)ctx->gpr[3];
-@@ -380,9 +808,73 @@ static void cellFsRead(ppu_context* ctx)
+@@ -380,9 +807,73 @@ static void cellFsRead(ppu_context* ctx)
      if (fd < 0 || fd >= FS_MAX || !g_files[fd]) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
      uint64_t raw_nbytes = ctx->gpr[5];
      long fpos_before = ftell(g_files[fd]);
@@ -27299,7 +27327,7 @@ index e8f6c2b..6159d43 100644
      /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
       * The intro cinematic is 28 seconds and this port renders it at a few frames
       * a second, so it cannot be watched to its end -- truncating the stream makes
-@@ -406,9 +898,9 @@ static void cellFsRead(ppu_context* ctx)
+@@ -406,9 +897,9 @@ static void cellFsRead(ppu_context* ctx)
        if (wfd >= 0 && fd == wfd)
            fprintf(stderr, "[fsread] fd=%d want=%llu got=%zu pos=%ld\n",
                    fd, (unsigned long long)nbytes, n, fpos_before); }
@@ -27311,7 +27339,7 @@ index e8f6c2b..6159d43 100644
  #endif
      /* Per-fd totals, not just the first 50 lines. The flat cap made "this file is
       * opened and never read" unfalsifiable: reads on a later-opened fd fall off
-@@ -533,6 +1025,7 @@ static void cellFsLseek(ppu_context* ctx)
+@@ -533,6 +1024,7 @@ static void cellFsLseek(ppu_context* ctx)
      int worigin = (wh == CELL_FS_SEEK_END) ? SEEK_END : (wh == CELL_FS_SEEK_CUR) ? SEEK_CUR : SEEK_SET;
      fseek(g_files[fd], (long)off, worigin);
      long p = ftell(g_files[fd]);
@@ -27319,7 +27347,7 @@ index e8f6c2b..6159d43 100644
      if (pos_ptr) vm_write64(pos_ptr, (uint64_t)p);
      ctx->gpr[3] = CELL_OK;
  }
-@@ -600,7 +1093,7 @@ static void cellFsFstat(ppu_context* ctx)
+@@ -600,7 +1092,7 @@ static void cellFsFstat(ppu_context* ctx)
                fprintf(stderr, "[fs] fstat fd=%d size %ld -> capped %ld (FS_FSTAT_CAP)\n", fd, sz, c);
                sz = c; } } }
      if (sb) write_stat(sb, CELL_FS_S_IFREG | 0x1B6, (uint64_t)sz);
@@ -27519,7 +27547,7 @@ index acbaf12..6ca46a3 100644
  }
  
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
-index e73a151..a2a1cdb 100644
+index e73a151..60e5b09 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
 @@ -377,8 +377,9 @@ static void sc_trace(uint64_t num, ppu_context* ctx, uint64_t a3, uint64_t a4,
@@ -27855,7 +27883,17 @@ index e73a151..a2a1cdb 100644
      /* Self-check: does .pdata actually describe the lifted bodies? If not, the
       * exact attribution mode misses ALL guest code by construction and its "0
       * guest samples" means nothing. Print it rather than assume either way. */
-@@ -766,9 +943,14 @@ extern "C" void ppu_log_host_chain(const char* tag);  /* fwd decl (defined below
+@@ -755,6 +932,9 @@ void ps3_sampler_start(void) {}
+ 
+ #endif
+ 
++#ifndef _WIN32
++extern "C" void ps3_samp_only_tid(unsigned long) {}
++#endif
+ extern "C" uint8_t* vm_base;   /* defined by the host */
+ extern "C" void ppu_log_host_chain(const char* tag);  /* fwd decl (defined below) */
+ 
+@@ -766,9 +946,14 @@ extern "C" void ppu_log_host_chain(const char* tag);  /* fwd decl (defined below
   * work was posted. spu_coh_is_reserved reads a global that stays zero until an
   * SPU reserves its first line, so an ordinary store pays one branch. */
  extern "C" int  spu_coh_is_reserved(uint32_t addr);
@@ -27870,7 +27908,7 @@ index e73a151..a2a1cdb 100644
  
  /* ---------------------------------------------------------------------------
   * lwarx/stwcx. cross-thread reservation invalidation.
-@@ -815,11 +997,183 @@ static volatile LONG g_resv_locks[PPU_RESV_LOCKS];
+@@ -815,11 +1000,183 @@ static volatile LONG g_resv_locks[PPU_RESV_LOCKS];
   * vm_write* reads g_resv_store_active directly (a hot global) so the default-off
   * path costs one predictable branch. */
  extern "C" int g_resv_store_active = -1;   /* -1 uninit, 0 off, 1 on */
@@ -28056,7 +28094,7 @@ index e73a151..a2a1cdb 100644
  }
  /* Where every guest thread is, as a GUEST address.
   *
-@@ -879,7 +1233,13 @@ extern "C" void ppu_resv_break_store(uint64_t ea)
+@@ -879,7 +1236,13 @@ extern "C" void ppu_resv_break_store(uint64_t ea)
      }
  }
  static inline volatile LONG* resv_slot(uint64_t ea) { return &g_resv_locks[((uint32_t)ea >> 4) & (PPU_RESV_LOCKS - 1)]; }
@@ -28071,7 +28109,7 @@ index e73a151..a2a1cdb 100644
  static inline void resv_unlock(volatile LONG* L) { _InterlockedExchange(L, 0); }
  static inline void ppu_resv_break(uint64_t addr)   /* MUST hold g_resv_lock */
  {
-@@ -921,6 +1281,7 @@ static inline int resv_off() { static int v = -1; if (v < 0) v = getenv("PPU_RES
+@@ -921,6 +1284,7 @@ static inline int resv_off() { static int v = -1; if (v < 0) v = getenv("PPU_RES
  extern "C" void ppu_ww_note_atomic(uint32_t ea, uint32_t val, int width, void* ra);
  extern "C" uint32_t g_ww_lo, g_ww_hi;
  
@@ -28079,7 +28117,7 @@ index e73a151..a2a1cdb 100644
  extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
  {
      uint32_t exp_raw = __builtin_bswap32(expected);
-@@ -948,7 +1309,7 @@ extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
+@@ -948,7 +1312,7 @@ extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
              if ((++n % 100000) == 1)
                  fprintf(stderr, "[ppu-steals-resv] %llu: PPU CAS on reserved line 0x%08X\n",
                          n, (uint32_t)ea & ~127u); } }
@@ -28088,7 +28126,7 @@ index e73a151..a2a1cdb 100644
      int ok = __atomic_compare_exchange_n((uint32_t*)(vm_base + ea), &exp_raw, new_raw,
                                           0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
      if (coh) {
-@@ -957,13 +1318,15 @@ extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
+@@ -957,13 +1321,15 @@ extern "C" int ppu_stwcx32(uint64_t ea, uint32_t expected, uint32_t val)
      }
      if (ok) ppu_resv_break(ea);
      resv_unlock(L);
@@ -28105,7 +28143,7 @@ index e73a151..a2a1cdb 100644
                fprintf(stderr, "[caswatch] 0x%08X %08X -> %08X lr=0x%08X tid=%u\n", (uint32_t)ea, expected, val,
                        self ? (uint32_t)self->lr : 0u, self ? (unsigned)self->thread_id : 0u); } }
      /* PPU_CAS_FAIL=1: histogram the EAs whose store-conditional keeps FAILING.
-@@ -1019,7 +1382,7 @@ extern "C" int ppu_stdcx64(uint64_t ea, uint64_t expected, uint64_t val)
+@@ -1019,7 +1385,7 @@ extern "C" int ppu_stdcx64(uint64_t ea, uint64_t expected, uint64_t val)
      resv_lock(L);
      if (self && self->reserve_addr != (uint32_t)ea) { resv_unlock(L); return 0; }
      int coh = spu_coh_is_reserved((uint32_t)ea);
@@ -28114,7 +28152,7 @@ index e73a151..a2a1cdb 100644
      int ok = __atomic_compare_exchange_n((uint64_t*)(vm_base + ea), &exp_raw, new_raw, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
      if (coh) {
          if (ok) spu_coh_notify_write((uint32_t)ea);
-@@ -1083,7 +1446,7 @@ static LONG WINAPI ppu_guard_veh(EXCEPTION_POINTERS* ep)
+@@ -1083,7 +1449,7 @@ static LONG WINAPI ppu_guard_veh(EXCEPTION_POINTERS* ep)
               * misses precisely the writer we are hunting. */
              if ((guest & ~31u) == (s_guard_ea & ~31u)) {
                  static int _cs = 0;
@@ -28123,7 +28161,7 @@ index e73a151..a2a1cdb 100644
                      /* The writer's own arguments, live. The guard fires INSIDE
                       * the writing routine, so for a memset/memcpy/arena-init
                       * these are (dst, value/src, length) in r3/r4/r5 -- i.e. the
-@@ -1132,7 +1495,7 @@ static LONG WINAPI ppu_guard_veh(EXCEPTION_POINTERS* ep)
+@@ -1132,7 +1498,7 @@ static LONG WINAPI ppu_guard_veh(EXCEPTION_POINTERS* ep)
          { uint32_t nowv = __builtin_bswap32(*(volatile uint32_t*)(vm_base + s_guard_ea));
            if (s_guard_pre && !nowv) {
                static int _z = 0;
@@ -28132,7 +28170,7 @@ index e73a151..a2a1cdb 100644
                    fprintf(stderr, "[GUARD] CLEARED 0x%08X: 0x%08X -> 0\n",
                            s_guard_ea, s_guard_pre);
                    /* The guard fires INSIDE the clearing routine, so the live guest
-@@ -1206,6 +1569,82 @@ static uint32_t g_tls_vaddr = 0, g_tls_filesz = 0, g_tls_memsz = 0;
+@@ -1206,6 +1572,82 @@ static uint32_t g_tls_vaddr = 0, g_tls_filesz = 0, g_tls_memsz = 0;
   * memory and stays on the fast path (spu_raw_is_reg excludes it). */
  #include "../spu/spu_raw.h"
  
@@ -28215,7 +28253,7 @@ index e73a151..a2a1cdb 100644
  static int vm_oob_report(uint32_t a, uint32_t n)
  {
      {
-@@ -1215,7 +1654,7 @@ static int vm_oob_report(uint32_t a, uint32_t n)
+@@ -1215,7 +1657,7 @@ static int vm_oob_report(uint32_t a, uint32_t n)
  #ifdef _WIN32
              /* one-shot backtrace on the first OOB so the lifted caller is known */
              static int bt = 0;
@@ -28224,7 +28262,7 @@ index e73a151..a2a1cdb 100644
                  void* fr[20]; USHORT m = RtlCaptureStackBackTrace(0, 20, fr, NULL);
                  HMODULE self = NULL;
                  GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-@@ -1438,8 +1877,9 @@ static PPU_THREAD_LOCAL int      g_vcall_sp = 0;
+@@ -1438,8 +1880,9 @@ static PPU_THREAD_LOCAL int      g_vcall_sp = 0;
   * them, until SPU code runs) it is the plain memcpy it replaced. */
  #define VM_WRITE_COH(a, src, n)                                               \
      do {                                                                      \
@@ -28235,7 +28273,7 @@ index e73a151..a2a1cdb 100644
              memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
              spu_coh_notify_write((uint32_t)(a));                              \
              spu_lockline_unlock();                                            \
-@@ -1476,6 +1916,9 @@ static inline void ppu_rwatch_hit(uint32_t a, int width, void* ra)
+@@ -1476,6 +1919,9 @@ static inline void ppu_rwatch_hit(uint32_t a, int width, void* ra)
          }
          fprintf(stderr, "[rwatch] n=%lu read%d 0x%08X = 0x%X guest-fn=0x%08X\n",
                  rn, width, a, v, ppu_prof_resolve_host(ra));
@@ -28245,7 +28283,7 @@ index e73a151..a2a1cdb 100644
      }
      /* ...and the guest call chain on the first hit, as PPU_WWATCH does. The
       * sampled guest-fn is a HOST return address that identical code folding
-@@ -1515,9 +1958,12 @@ static inline void ppu_null_read_report(uint32_t a, int width, void* ra)
+@@ -1515,9 +1961,12 @@ static inline void ppu_null_read_report(uint32_t a, int width, void* ra)
              width * 8, a, a, ppu_prof_resolve_host(ra),
              s_n == 16 ? "  [further NULL reads not reported]" : "");
      fflush(stderr);
@@ -28259,7 +28297,7 @@ index e73a151..a2a1cdb 100644
      if ((uint32_t)a < 0x10000u) ppu_null_read_report((uint32_t)a, 1, __builtin_return_address(0));
  #ifdef VM_SAMPLE_READS
      { static uint64_t c=0; if ((++c % 2000000ull)==0) fprintf(stderr, "[sample] read8  0x%08X ra0=%p ra1=%p\n", (uint32_t)a, __builtin_return_address(0), __builtin_return_address(1)); }
-@@ -1553,11 +1999,30 @@ uint8_t  vm_read8 (uint64_t a) { if (vm_oob((uint32_t)a,1)) return 0; vm_hotmap(
+@@ -1553,11 +2002,30 @@ uint8_t  vm_read8 (uint64_t a) { if (vm_oob((uint32_t)a,1)) return 0; vm_hotmap(
            n=0; } }
        else { last=(uint32_t)a; n=0; } }
      return vm_base[(uint32_t)a]; }
@@ -28293,7 +28331,7 @@ index e73a151..a2a1cdb 100644
      if ((uint32_t)a < 0x10000u) ppu_null_read_report((uint32_t)a, 4, __builtin_return_address(0));
      /* Raw SPU problem state: reading the outbound mailbox POPS it, so that one
       * cannot be served out of memory. Everything else in the window the SPU
-@@ -1591,7 +2056,7 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
+@@ -1591,7 +2059,7 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
       * consumption; print the ORIGINAL truncating writer we recorded. */
      if (g_pt_val>=0 && g_last_rd_val==(uint32_t)g_pt_val) {
          for (int i=0;i<g_pt_n;i++) if (g_pt_live[i] && g_pt_addr[i]==(uint32_t)a) {
@@ -28302,7 +28340,7 @@ index e73a151..a2a1cdb 100644
                  fprintf(stderr,"[PT-HIT] persistent trunc [0x%08X]=0x%08X\n  TRUNCATED-BY:%s\n  READ-BACK-BY:%s\n",
                          (uint32_t)a,(uint32_t)g_pt_val, g_pt_bt[i], rb); }
              g_pt_live[i]=0; break; } }
-@@ -1611,8 +2076,8 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
+@@ -1611,8 +2079,8 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
      /* PPU_RVAL=<hex>: catch where a value is READ FROM memory (its source loc) —
       * the complement to PPU_WVAL, to find the origin of the 0xC708C708 poison. */
      { static int64_t rv=-2; if (rv==-2){ const char* e=getenv("PPU_RVAL"); rv=e?(int64_t)strtoul(e,0,16):-1; }
@@ -28313,7 +28351,7 @@ index e73a151..a2a1cdb 100644
          char ln[820]; int p=snprintf(ln,sizeof ln,"[RVAL] read 0x%08X = 0x%08X guest:",(uint32_t)a,(uint32_t)rv);
          for(int i=0;i<fr && i<10;i++){ uintptr_t tgt=(uintptr_t)bt[i]; uint32_t bg=0; uintptr_t bh=0;
            for(uint64_t k=0;k<function_table_count;k++){ uintptr_t h=(uintptr_t)function_table[k].func; if(h<=tgt&&h>bh){bh=h;bg=function_table[k].addr;} }
-@@ -1651,7 +2116,9 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
+@@ -1651,7 +2119,9 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
                    rf = ((uint32_t)c[8]<<24)|((uint32_t)c[9]<<16)|((uint32_t)c[10]<<8)|c[11];
                }
                fprintf(stderr, "[HOTREAD] GCM control spin: put=0x%08X get=0x%08X "
@@ -28324,7 +28362,7 @@ index e73a151..a2a1cdb 100644
            } else fprintf(stderr, "[HOTREAD] spinning on 0x%08X (=0x%08X) guest cia=0x%08X lr=0x%08X\n", (uint32_t)a, __builtin_bswap32(v),
            g_active_ctx?(uint32_t)g_active_ctx->cia:0, g_active_ctx?(uint32_t)g_active_ctx->lr:0); n=0;
  #ifdef _WIN32
-@@ -1670,7 +2137,7 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
+@@ -1670,7 +2140,7 @@ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch
        } }
        else { last=(uint32_t)a; n=0; } }
      return __builtin_bswap32(v); }
@@ -28333,7 +28371,7 @@ index e73a151..a2a1cdb 100644
      if ((uint32_t)a < 0x10000u) ppu_null_read_report((uint32_t)a, 8, __builtin_return_address(0)); uint64_t v; memcpy(&v, vm_base + (uint32_t)a, 8);
  #ifdef VM_SAMPLE_READS
      { static uint64_t c=0; if ((++c % 2000000ull)==0) fprintf(stderr, "[sample] read64 0x%08X\n", (uint32_t)a); }
-@@ -1689,7 +2156,7 @@ uint64_t vm_read64(uint64_t a) { if (vm_oob((uint32_t)a,8)) return 0; vm_hotmap(
+@@ -1689,7 +2159,7 @@ uint64_t vm_read64(uint64_t a) { if (vm_oob((uint32_t)a,8)) return 0; vm_hotmap(
  #ifdef _WIN32
      { static int64_t r6=-2; if(r6==-2){const char*e=getenv("PPU_RVAL64"); r6=e?(int64_t)strtoul(e,0,16):-1;}
        if(r6>=0){ uint64_t vb=__builtin_bswap64(v);
@@ -28342,7 +28380,7 @@ index e73a151..a2a1cdb 100644
            void* bt[24]; unsigned short fr=RtlCaptureStackBackTrace(0,24,bt,0);
            char ln[820]; int p=snprintf(ln,sizeof ln,"[RVAL64] read64 0x%08X = 0x%016llX guest:",(uint32_t)a,(unsigned long long)vb);
            for(int i=0;i<fr && i<10;i++){ uintptr_t tgt=(uintptr_t)bt[i]; uint32_t bg=0; uintptr_t bh=0;
-@@ -1846,7 +2313,7 @@ static inline void barrier_watch_hit(uint32_t a, uint32_t v, int width, void* ra
+@@ -1846,7 +2316,7 @@ static inline void barrier_watch_hit(uint32_t a, uint32_t v, int width, void* ra
      if (!b) return;
      if (a >= b + 0x40 && a < b + 0xC0) {
          static int _n = 0;
@@ -28351,7 +28389,7 @@ index e73a151..a2a1cdb 100644
              fprintf(stderr, "[sync-write] +0x%02X <- 0x%X (w%d) guest-fn=0x%08X\n",
                      a - b, v, width, ppu_prof_resolve_host(ra));
      }
-@@ -1857,7 +2324,7 @@ extern "C" void ppu_ww_note_atomic(uint32_t ea, uint32_t val, int width, void* r
+@@ -1857,7 +2327,7 @@ extern "C" void ppu_ww_note_atomic(uint32_t ea, uint32_t val, int width, void* r
  {
      barrier_watch_hit(ea, val, width, ra);
  }
@@ -28360,7 +28398,7 @@ index e73a151..a2a1cdb 100644
  #ifdef _WIN32
      /* PT detector: does this byte-write turn its word into the hunted truncated value? */
      { if(g_pt_val==-2){const char*e=getenv("PT"); g_pt_val=e?(int64_t)strtoul(e,0,16):-1;}
-@@ -1867,9 +2334,9 @@ void vm_write8 (uint64_t a, uint8_t  v) { barrier_watch_hit((uint32_t)a, v, 1, _
+@@ -1867,9 +2337,9 @@ void vm_write8 (uint64_t a, uint8_t  v) { barrier_watch_hit((uint32_t)a, v, 1, _
          else if(((uint32_t)a&3)==0 && v!=0) pt_restore(wa); /* MSB byte set non-zero = restored */ } }
  #endif
      VM_WRITE_COH(a, &v, 1); }
@@ -28372,7 +28410,7 @@ index e73a151..a2a1cdb 100644
  #ifdef _WIN32
      /* PT restore: a full-word store of a valid pointer (high byte set) to a
       * previously-truncated slot clears the record (that truncation was transient). */
-@@ -1881,7 +2348,7 @@ void vm_write32(uint64_t a, uint32_t v) { barrier_watch_hit((uint32_t)a, v, 4, _
+@@ -1881,7 +2351,7 @@ void vm_write32(uint64_t a, uint32_t v) { barrier_watch_hit((uint32_t)a, v, 4, _
         * have side effects. The plain store above still happens -- the registers
         * are guest memory and the PPU reads most of them straight back. */
        if (spu_raw_is_reg((uint32_t)a)) spu_raw_reg_store((uint32_t)a, _v, 4); } }
@@ -28381,7 +28419,7 @@ index e73a151..a2a1cdb 100644
      /* PPU_WWATCH covers the 64-bit store too. It did not, which made the watch
       * blind to exactly the code that matters most for it: every bignum and
       * every 64-bit struct field is written with std, so a watch on one would
-@@ -1893,6 +2360,49 @@ void vm_write64(uint64_t a, uint64_t v) {
+@@ -1893,6 +2363,49 @@ void vm_write64(uint64_t a, uint64_t v) {
      v = __builtin_bswap64(v); VM_WRITE_COH(a, &v, 8); }
  }
  
@@ -28431,7 +28469,7 @@ index e73a151..a2a1cdb 100644
  /* ---- malloc allocation tracker (PS3_ALLOCTAG) -------------------------------
   * Records recent guest malloc results {ptr,size,lr,id} in a ring so we can ask,
   * for a garbage object, which allocation it belongs to and where it came from --
-@@ -1968,7 +2478,7 @@ extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
+@@ -1968,7 +2481,7 @@ extern "C" void ppu_register_function(uint64_t addr, ppu_fn fn)
          i = (i + 1) & PPU_HASH_MASK;
      }
      static int warned = 0;
@@ -28440,7 +28478,7 @@ index e73a151..a2a1cdb 100644
          fprintf(stderr, "[ppu] function table full (%u/%u) -- raise PPU_HASH_BITS; "
                  "0x%08X dropped\n", g_fn_count, (unsigned)PPU_HASH_SIZE, a);
  }
-@@ -2033,7 +2543,7 @@ extern "C" void ydkj_memmove_0036FA74(ppu_context* ctx)
+@@ -2033,7 +2546,7 @@ extern "C" void ydkj_memmove_0036FA74(ppu_context* ctx)
      if (vm_base && dst <= 0x400240A8u && 0x400240A8u < dst + n) {
          uint32_t soff = 0x400240A8u - dst + src;
          uint32_t sval = __builtin_bswap32(*(volatile uint32_t*)(vm_base + soff));
@@ -28449,7 +28487,7 @@ index e73a151..a2a1cdb 100644
              fprintf(stderr,"[memfix] copy dst=0x%08X src=0x%08X n=0x%X -> 0x400240A8 gets src[0x%08X]=0x%08X\n",
                      dst, src, n, soff, sval);
      }
-@@ -2078,6 +2588,7 @@ static uint32_t ppu_code_hi(void)
+@@ -2078,6 +2591,7 @@ static uint32_t ppu_code_hi(void)
      return hi;
  }
  
@@ -28457,7 +28495,7 @@ index e73a151..a2a1cdb 100644
  extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
  {
      if (!ctx || !vm_base) return;
-@@ -2108,7 +2619,7 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
+@@ -2108,7 +2622,7 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
            fprintf(stderr, "%s\n", gr);
        } }
      if (!vm_oob(sp,4)) { char rw[600]; int rp=snprintf(rw,sizeof rw,"      rawstk:");
@@ -28466,7 +28504,7 @@ index e73a151..a2a1cdb 100644
          fprintf(stderr,"%s\n",rw); }
      /* Identify the worker's dispatched method: func_000750A8 vcalls
       * [[arg+0xC]+0] (code) with toc [[arg+0xC]+4]. Dump for the known thread
-@@ -2118,11 +2629,11 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
+@@ -2118,11 +2632,11 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
        for (int j=0;j<2;j++){ uint32_t o=args[j];
          if (vm_oob(o+0x10,4)) continue;
          uint32_t vt, code, toc; { uint32_t t;
@@ -28481,7 +28519,7 @@ index e73a151..a2a1cdb 100644
            fprintf(stderr,"      ARG[0x%08X] vtbl=0x%08X -> method code=0x%08X toc=0x%08X (worker body?)\n", o, vt, code, toc); }
        } }
      /* The real frame chain FIRST, then the scan.
-@@ -2141,10 +2652,10 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
+@@ -2141,10 +2655,10 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
        uint32_t f = sp;
        for (int d = 0; d < 24 && bp < 820; d++) {
            if (vm_oob(f, 8)) break;
@@ -28494,7 +28532,7 @@ index e73a151..a2a1cdb 100644
            uint32_t ra = __builtin_bswap32(t);
            if (ra >= 0x10000 && ra < ppu_code_hi()) {
                uint32_t bg = 0;
-@@ -2160,7 +2671,7 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
+@@ -2160,7 +2674,7 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
      uint32_t last = 0;
      for (int i = 0; i < 700 && gp < 1100; i++) {
          uint32_t a = sp + i*4; if (vm_oob(a,4)) break;
@@ -28503,7 +28541,7 @@ index e73a151..a2a1cdb 100644
          if (w < 0x10000 || w >= ppu_code_hi()) continue;
          uint32_t bg = 0;
          for (uint64_t k = 0; k < function_table_count; k++) { uint32_t aa = function_table[k].addr; if (aa <= w && aa > bg) bg = aa; }
-@@ -2338,8 +2849,13 @@ static void icall_hist(ppu_context* ctx, uint32_t tgt, int phase)
+@@ -2338,8 +2852,13 @@ static void icall_hist(ppu_context* ctx, uint32_t tgt, int phase)
      ReleaseSRWLockExclusive(&lk);
  }
  
@@ -28517,7 +28555,7 @@ index e73a151..a2a1cdb 100644
      static int on = -1;
      if (on < 0) on = getenv("PPU_CSCHECK") ? 1 : 0;
      { static int hg = -1; if (hg < 0) hg = getenv("PS3_ICALL_GATE") ? 1 : 0;
-@@ -2365,6 +2881,14 @@ extern "C" void ps3_indirect_call(ppu_context* ctx)
+@@ -2365,6 +2884,14 @@ extern "C" void ps3_indirect_call(ppu_context* ctx)
      }
  }
  
@@ -28532,7 +28570,7 @@ index e73a151..a2a1cdb 100644
  static void ps3_indirect_call_impl(ppu_context* ctx)
  {
      g_active_ctx = ctx;
-@@ -2385,7 +2909,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2385,7 +2912,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
        if(bc){ unsigned t=(unsigned)ctx->thread_id & 63; g_bc_last[t]=(uint32_t)ctx->ctr; g_bc_cnt[t]++; } }
  #ifdef _WIN32
      { static int64_t tw=-2; if(tw==-2){const char*e=getenv("PPU_TOCWATCH"); tw=e?(int64_t)strtoul(e,0,16):-1;}
@@ -28541,7 +28579,7 @@ index e73a151..a2a1cdb 100644
          char* mb=(char*)GetModuleHandleA(0); void* bt[24]; unsigned short fr=RtlCaptureStackBackTrace(0,24,bt,0);
          char ln[800]; int p=snprintf(ln,sizeof ln,"[TOCWATCH] r2=0x%08X ctr=0x%08X bt:",(uint32_t)ctx->gpr[2],(uint32_t)ctx->ctr);
          for(int i=0;i<fr;i++) p+=snprintf(ln+p,sizeof(ln)-p," %llX",(unsigned long long)((char*)bt[i]-mb));
-@@ -2560,7 +3084,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2560,7 +3087,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
                  uint32_t _c = __builtin_bswap32(*(volatile uint32_t*)(vm_base + _opd));
                  if (_c && (_c & 3) == 0) {
                      static int _n2 = 0;
@@ -28550,7 +28588,7 @@ index e73a151..a2a1cdb 100644
                          fprintf(stderr, "[ppu] OPD-RECOVER: ctr=0 -> dispatching opd[0]=0x%08X\n", _c);
                      addr = _c;
                  }
-@@ -2629,7 +3153,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2629,7 +3156,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
          ppu_fn fn2 = ppu_lookup(toc_reg);
          if (fn2) {
              static int _n = 0;
@@ -28559,7 +28597,7 @@ index e73a151..a2a1cdb 100644
              ctx->gpr[2] = addr;        /* callee TOC = the (TOC) value from the code slot */
              addr = toc_reg; ctx->ctr = toc_reg;
              fn = fn2;
-@@ -2642,7 +3166,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2642,7 +3169,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
          static thread_local int s_depth = 0;
          if (s_depth > 4000) {
              static int warned = 0;
@@ -28568,7 +28606,7 @@ index e73a151..a2a1cdb 100644
                  fprintf(stderr, "[ppu] recursion cap @0x%08X depth=%d -- skipping\n", addr, s_depth);
              return;
          }
-@@ -2669,7 +3193,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2669,7 +3196,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
          /* PPU_RETWATCH=<hex>: catch the first vcall(s) whose RETURN value (r3)
           * equals this, pinning the exact virtual method that produces the poison. */
          { static int64_t rw=-2; if(rw==-2){const char*e=getenv("PPU_RETWATCH"); rw=e?(int64_t)strtoul(e,0,16):-1;}
@@ -28577,7 +28615,7 @@ index e73a151..a2a1cdb 100644
              fprintf(stderr,"[RETWATCH] vcall -> func_%08X returned r3=0x%08X\n", addr, (uint32_t)rw);
  #ifdef _WIN32
              void* bt[16]; unsigned short fr=RtlCaptureStackBackTrace(0,16,bt,0);
-@@ -2709,9 +3233,9 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2709,9 +3236,9 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
            if(_nv && ((tgt & 3u)!=0u || tgt < 0x10000u || tgt >= 0x40000000u)) _invalid = true; }
          if (_invalid) {
              static int _gn = 0;
@@ -28589,7 +28627,7 @@ index e73a151..a2a1cdb 100644
                  char* mb=(char*)GetModuleHandleA(0); void* bt[26]; unsigned short fr=RtlCaptureStackBackTrace(0,26,bt,0);
                  char ln[820]; int p=snprintf(ln,sizeof ln,"      GVBT this=0x%08X r2=0x%08X lr=0x%08X rva:",(uint32_t)ctx->gpr[3],(uint32_t)ctx->gpr[2],(uint32_t)ctx->lr);
                  for(int i=0;i<fr;i++) p+=snprintf(ln+p,sizeof(ln)-p," %llX",(unsigned long long)((char*)bt[i]-mb));
-@@ -2726,10 +3250,24 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2726,10 +3253,24 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
       * Detect a long run of identical unresolved targets and bail so the run
       * stays fast and the log readable. */
      static uint32_t last = 0xFFFFFFFFu; static uint32_t streak = 0;
@@ -28614,7 +28652,7 @@ index e73a151..a2a1cdb 100644
              fprintf(stderr, "[ppu] FATAL: stuck calling 0x%08X (%u times) -- aborting run\n", cur, streak);
              /* The target alone rarely says why. Dump the descriptor the guest
               * dereferenced (r9/r11/r12 are where the ELFv1 idiom keeps it) and
-@@ -2753,7 +3291,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
+@@ -2753,7 +3294,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
          }
          return;   /* don't spam the log on a tight retry loop */
      }
@@ -28623,7 +28661,7 @@ index e73a151..a2a1cdb 100644
      fprintf(stderr, "[ppu] unresolved indirect call -> 0x%08X (tid=%llu lr=0x%08X)\n",
              (uint32_t)ctx->ctr, (unsigned long long)ctx->thread_id, (uint32_t)ctx->lr);
      /* With no NID table the very first one of these is the expected outcome
-@@ -2993,16 +3531,16 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -2993,16 +3534,16 @@ extern "C" void lv2_syscall(ppu_context* ctx)
      /* One-shot: resolve the guest function that makes the flag=100 spin syscall
       * (num=141 r3=0x64), so we can inspect its lifted arg setup (is mode=garbage a
       * lift bug or a real uninit-object field?). */
@@ -28644,7 +28682,7 @@ index e73a151..a2a1cdb 100644
          uintptr_t tgt=(uintptr_t)ra; uint32_t bg=0; uintptr_t bh=0;
          for(uint64_t k=0;k<function_table_count;k++){ uintptr_t h=(uintptr_t)function_table[k].func; if(h<=tgt&&h>bh){bh=h;bg=function_table[k].addr;} }
          fprintf(stderr,"[sc-caller] port_send(port=1) from func_%08X+0x%llX data=0x%08X/0x%08X/0x%08X\n",
-@@ -3061,7 +3599,6 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -3061,7 +3602,6 @@ extern "C" void lv2_syscall(ppu_context* ctx)
      case 988:     /* sys_tty_write — canonical LV2 number (psdevwiki); some CRTs
                     * use this instead of 403. Same ABI. */
      case 403: {   /* sys_tty_write(s32 ch, cptr buf, u32 len, ptr pwritelen) */
@@ -28652,7 +28690,7 @@ index e73a151..a2a1cdb 100644
          uint32_t buf  = (uint32_t)ctx->gpr[4];
          uint32_t len  = (uint32_t)ctx->gpr[5];
          uint32_t pwl  = (uint32_t)ctx->gpr[6];
-@@ -3125,7 +3662,7 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -3125,7 +3665,7 @@ extern "C" void lv2_syscall(ppu_context* ctx)
                  bt[bn] = 0;
                  if (strstr(bt, pat)) {
                      static int tn = 0;
@@ -28661,7 +28699,7 @@ index e73a151..a2a1cdb 100644
                          fprintf(stderr, "%c[TTY_BT] \"%.90s\"%c", 10, bt, 10);
                          ppu_log_host_chain("tty-bt");
                      }
-@@ -3144,7 +3681,7 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -3144,7 +3684,7 @@ extern "C" void lv2_syscall(ppu_context* ctx)
                  strstr(pt, "sentinel") || strstr(pt, "double-deallocate") ||
                  strstr(pt, "out of memory on request")) {
                  static int pc = 0;
@@ -28670,7 +28708,7 @@ index e73a151..a2a1cdb 100644
              }
          }
          /* DIAGNOSTIC (FLOW_PSSGTRACE=1): when the title's tty output carries a
-@@ -3206,13 +3743,29 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -3206,13 +3746,29 @@ extern "C" void lv2_syscall(ppu_context* ctx)
          if (s_sbp) {
              static ULONGLONG s_acc[1024]={0}; static uint32_t s_cnt[1024]={0}; static ULONGLONG s_win=0;
              uint32_t _a3=(uint32_t)ctx->gpr[3], _a4=(uint32_t)ctx->gpr[4], _a5=(uint32_t)ctx->gpr[5];
@@ -28705,7 +28743,7 @@ index e73a151..a2a1cdb 100644
                  void* ra=__builtin_return_address(0);
                  uintptr_t tgt=(uintptr_t)ra; uint32_t bg=0; uintptr_t bh=0;
                  for(uint64_t k=0;k<function_table_count;k++){ uintptr_t h=(uintptr_t)function_table[k].func; if(h<=tgt&&h>bh){bh=h;bg=function_table[k].addr;} }
-@@ -3223,8 +3776,8 @@ extern "C" void lv2_syscall(ppu_context* ctx)
+@@ -3223,8 +3779,8 @@ extern "C" void lv2_syscall(ppu_context* ctx)
              }
              if (s_win==0) s_win=_t0;
              if (_t0 - s_win >= 2000) {
@@ -28716,7 +28754,7 @@ index e73a151..a2a1cdb 100644
                  for (int n=0;n<1024;n++){s_acc[n]=0;s_cnt[n]=0;} s_win=_t0;
              }
              if (_ok) { sc_trace(num, ctx, _a3, _a4, _a5, 0); return; }
-@@ -3423,7 +3976,7 @@ extern "C" uint32_t ppu_load_elf(const char* path)
+@@ -3423,7 +3979,7 @@ extern "C" uint32_t ppu_load_elf(const char* path)
                            if (memcmp(vm_base + keep_ea, keep, keep_len)) {
                                memcpy(vm_base + keep_ea, keep, keep_len);
                                static int n = 0;
@@ -28725,7 +28763,7 @@ index e73a151..a2a1cdb 100644
                            }
                            Sleep(2);
                        } } };
-@@ -3669,7 +4222,9 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
+@@ -3669,7 +4225,9 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
       * sys_mutex -- LBP's main + bringup threads both held the GCM lock at once
       * and concurrently-emitted fences vanished (the boot-loading stall). */
      { extern uint64_t ppu_thread_register_main(void);
@@ -28736,7 +28774,7 @@ index e73a151..a2a1cdb 100644
  
      /* PS3 process-entry ABI: the loader hands _start register state the CRT
       * (_initialize) consumes directly:
-@@ -3772,6 +4327,7 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
+@@ -3772,6 +4330,7 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
      fprintf(stderr, "[ppu] run: code 0x%08X, toc 0x%08X, sp 0x%08X\n", code, toc, stack_top);
      g_active_ctx = &ctx;
      ppu_resv_register(&ctx);   /* main/entry thread: join the reservation set too */
@@ -29393,7 +29431,7 @@ index d857f30..48278e7 100644
                          "[spinlock] STUCK on 0x%08X after 200k spins: guest lr=0x%08X, "
                          "held by tid %lu, this is tid %lu%s\n",
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 0b235d0..c0e255d 100644
+index 0b235d0..1cbaf69 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -13,6 +13,25 @@
@@ -32206,7 +32244,7 @@ index 931d3b3..86e94a3 100644
 +#undef SPU_DRAIN_AT_RETURN
  }
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index 0fca7f5..33ca5b4 100644
+index 0fca7f5..a1b2905 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
 @@ -117,24 +117,98 @@ static inline u128 spu_mpy(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._s3
@@ -32575,7 +32613,7 @@ index 0fca7f5..33ca5b4 100644
  /* ---- shift / rotate immediate (word lanes) ---- */
  static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
  static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
-@@ -257,42 +531,455 @@ static inline u128 spu_rothi(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i
+@@ -257,42 +531,403 @@ static inline u128 spu_rothi(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i
  static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
  static inline u128 spu_rotmai(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
  static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
@@ -32851,36 +32889,6 @@ index 0fca7f5..33ca5b4 100644
 +    v = _mm256_floor_pd(_mm256_min_pd(_mm256_max_pd(v, _mm256_setzero_pd()), _mm256_set1_pd(4294967295.0)));
 +    const __m128i t = _mm256_cvttpd_epi32(_mm256_sub_pd(v, _mm256_set1_pd(2147483648.0)));
 +    u128 r; _mm_storeu_si128((__m128i*)r._u32, _mm_xor_si128(t, _mm_set1_epi32((int)0x80000000u))); return r; }
-+#elif defined(__aarch64__)
-+/* NEON, as the AVX2 path: widen to double, scale by the power of two (exact),
-+ * clamp and truncate (FCVTZS/FCVTZU round toward zero, like the casts in the
-+ * exact path). Exponent 255 and denormal inputs go exact. */
-+static inline __attribute__((always_inline)) int spu_xf_e255_or_denorm_n(uint32x4_t v)
-+{
-+    const uint32x4_t e = vandq_u32(v, vdupq_n_u32(0x7F800000u));
-+    const uint32x4_t m = vandq_u32(v, vdupq_n_u32(0x007FFFFFu));
-+    const uint32x4_t bad = vorrq_u32(vceqq_u32(e, vdupq_n_u32(0x7F800000u)),
-+                                     vandq_u32(vceqzq_u32(e), vmvnq_u32(vceqzq_u32(m))));
-+    return vmaxvq_u32(bad) != 0;
-+}
-+static inline __attribute__((always_inline)) u128 spu_cflts(u128 a, int i8) {
-+    const uint32x4_t ia = vld1q_u32(a._u32);
-+    if (__builtin_expect(spu_xf_e255_or_denorm_n(ia), 0)) return spu_cflts_exact(a, i8);
-+    const float32x4_t f = vreinterpretq_f32_u32(ia);
-+    const float64x2_t sc = vdupq_n_f64(spu_pow2i(173 - i8));
-+    const float64x2_t lo_ = vdupq_n_f64(-2147483648.0), hi_ = vdupq_n_f64(2147483647.0);
-+    const float64x2_t lo = vminq_f64(vmaxq_f64(vmulq_f64(vcvt_f64_f32(vget_low_f32(f)), sc), lo_), hi_);
-+    const float64x2_t hi = vminq_f64(vmaxq_f64(vmulq_f64(vcvt_high_f64_f32(f), sc), lo_), hi_);
-+    u128 r; vst1q_s32(r._s32, vcombine_s32(vmovn_s64(vcvtq_s64_f64(lo)), vmovn_s64(vcvtq_s64_f64(hi)))); return r; }
-+static inline __attribute__((always_inline)) u128 spu_cfltu(u128 a, int i8) {
-+    const uint32x4_t ia = vld1q_u32(a._u32);
-+    if (__builtin_expect(spu_xf_e255_or_denorm_n(ia), 0)) return spu_cfltu_exact(a, i8);
-+    const float32x4_t f = vreinterpretq_f32_u32(ia);
-+    const float64x2_t sc = vdupq_n_f64(spu_pow2i(173 - i8));
-+    const float64x2_t z = vdupq_n_f64(0.0), hi_ = vdupq_n_f64(4294967295.0);
-+    const float64x2_t lo = vminq_f64(vmaxq_f64(vmulq_f64(vcvt_f64_f32(vget_low_f32(f)), sc), z), hi_);
-+    const float64x2_t hi = vminq_f64(vmaxq_f64(vmulq_f64(vcvt_high_f64_f32(f), sc), z), hi_);
-+    u128 r; vst1q_u32(r._u32, vcombine_u32(vmovn_u64(vcvtq_u64_f64(lo)), vmovn_u64(vcvtq_u64_f64(hi)))); return r; }
 +#else
 +static inline u128 spu_cflts(u128 a, int i8) { return spu_cflts_exact(a, i8); }
 +static inline u128 spu_cfltu(u128 a, int i8) { return spu_cfltu_exact(a, i8); }
@@ -32940,28 +32948,6 @@ index 0fca7f5..33ca5b4 100644
 +static inline __attribute__((always_inline)) u128 spu_cuflt(u128 a, int i8) {
 +    const u128 r = spu_xf_int_scale(_mm_loadu_si128((const __m128i*)a._u32), i8, 1, a);
 +    if (__builtin_expect(!(r._u32[0] == 0xFFFFFFFFu && r._u32[1] == 1u), 1)) return r;
-+    return spu_cuflt_exact(a, i8); }
-+#elif defined(__aarch64__)
-+/* As the SSE2 path: integers below 2^24 convert exactly and the power-of-two
-+ * scale keeps the product exact while it stays a plain normal float (or zero);
-+ * any other lane takes the exact path. */
-+static inline __attribute__((always_inline)) u128 spu_xf_int_scale_n(float32x4_t vf, int i8, uint32x4_t big, int* ok) {
-+    u128 r; *ok = 0;
-+    if (vmaxvq_u32(big) != 0 || i8 - 155 < -126 || i8 - 155 > 127) return r;
-+    const float32x4_t vr = vmulq_f32(vf, vreinterpretq_f32_u32(vdupq_n_u32((uint32_t)(i8 - 155 + 127) << 23)));
-+    if (spu_xf_e255_or_denorm_n(vreinterpretq_u32_f32(vr))) return r;
-+    vst1q_f32(r._f32, vr); *ok = 1; return r; }
-+static inline __attribute__((always_inline)) u128 spu_csflt(u128 a, int i8) {
-+    const int32x4_t v = vld1q_s32(a._s32);
-+    const uint32x4_t big = vcgtq_u32(vreinterpretq_u32_s32(vabsq_s32(v)), vdupq_n_u32((1u << 24) - 1u));
-+    int ok; const u128 r = spu_xf_int_scale_n(vcvtq_f32_s32(v), i8, big, &ok);
-+    if (__builtin_expect(ok, 1)) return r;
-+    return spu_csflt_exact(a, i8); }
-+static inline __attribute__((always_inline)) u128 spu_cuflt(u128 a, int i8) {
-+    const uint32x4_t v = vld1q_u32(a._u32);
-+    const uint32x4_t big = vcgtq_u32(v, vdupq_n_u32((1u << 24) - 1u));
-+    int ok; const u128 r = spu_xf_int_scale_n(vcvtq_f32_u32(v), i8, big, &ok);
-+    if (__builtin_expect(ok, 1)) return r;
 +    return spu_cuflt_exact(a, i8); }
 +#else
 +static inline u128 spu_csflt(u128 a, int i8) { return spu_csflt_exact(a, i8); }
@@ -33052,7 +33038,7 @@ index 0fca7f5..33ca5b4 100644
  
  /* ---- SPU double-precision (2 doubles/reg; dword i = words 2i(high),2i+1(low)).
   * Reassemble via _u32 -- our u128 is host-LE, so a naive _f64[i] would SWAP the
-@@ -317,7 +1004,7 @@ static inline u128 spu_dfnma(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<2;i
+@@ -317,7 +952,7 @@ static inline u128 spu_dfnma(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<2;i
  static inline u128 spu_dfceq(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)==spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
  static inline u128 spu_dfcmeq(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x==y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
  /* Singles occupy preferred words 0 and 2 when converting doubleword lanes. */
@@ -33061,7 +33047,7 @@ index 0fca7f5..33ca5b4 100644
  static inline u128 spu_frds(u128 a) { u128 r; memset(&r,0,sizeof r); for(int i=0;i<2;i++) r._f32[i*2]=(float)spu__dget(a,i); return r; }
  /* mpyhhu: high-16 x high-16 of each word, unsigned, full 32-bit product. */
  static inline u128 spu_mpyhhu(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
-@@ -344,18 +1031,34 @@ static inline u128 spu_shl(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uin
+@@ -344,18 +979,34 @@ static inline u128 spu_shl(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uin
  static inline u128 spu_shlh(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=b._u16[i]&0x1F; r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); } return r; }
  static inline u128 spu_rot(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=b._u32[i]&31; r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; } return r; }
  static inline u128 spu_roth(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=b._u16[i]&15; r._u16[i]= sh ? (uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))) : a._u16[i]; } return r; }
@@ -33102,7 +33088,7 @@ index 0fca7f5..33ca5b4 100644
  
  /* ---- Phase 2: rotmahi ---- */
  static inline u128 spu_rotmahi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._s16[i]=(sh>15)?(a._s16[i]>>15):(a._s16[i]>>sh); return r; }
-@@ -409,8 +1112,24 @@ static inline u128 spu_mpyh(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._s3
+@@ -409,8 +1060,24 @@ static inline u128 spu_mpyh(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._s3
  static inline u128 spu_mpyhh(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[2*i+1] * (int32_t)b._s16[2*i+1]; return r; }
  static inline u128 spu_mpys(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++){ int32_t p=(int32_t)a._s16[2*i]*(int32_t)b._s16[2*i]; r._s32[i]=(int16_t)(p>>16); } return r; }
  static inline u128 spu_mpyui(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i]*(uint32_t)(uint16_t)imm; return r; }
@@ -33129,7 +33115,7 @@ index 0fca7f5..33ca5b4 100644
  static const uint32_t spu_frest_fraction_lut[32] = {
      0x7FFBE0, 0x7F87A6, 0x70EF72, 0x708B40, 0x638B12, 0x633AEA, 0x5792C4, 0x574AA0,
      0x4CCA7E, 0x4C9262, 0x430A44, 0x42D62A, 0x3A2E12, 0x39FDFA, 0x3215E4, 0x31F1D2,
-@@ -429,7 +1148,7 @@ static const uint32_t spu_frsqest_fraction_lut[64] = {
+@@ -429,7 +1096,7 @@ static const uint32_t spu_frsqest_fraction_lut[64] = {
      0x4180D7, 0x4180D7, 0x3E24CC, 0x3E24CC, 0x3AF4C3, 0x3AF4C3, 0x37E8BA, 0x37E8BA
  };
  
@@ -33138,7 +33124,7 @@ index 0fca7f5..33ca5b4 100644
      u128 r;
      for (int i = 0; i < 4; i++) {
          uint32_t bits = a._u32[i];
-@@ -444,7 +1163,7 @@ static inline u128 spu_frsqest(u128 a) {
+@@ -444,7 +1111,7 @@ static inline u128 spu_frsqest(u128 a) {
  }
  /* frest: reciprocal estimate (refined by the following spu_fi Newton step).
   * Full-precision 1/x is exact after fi and >= HW-estimate accuracy. */
@@ -33147,7 +33133,7 @@ index 0fca7f5..33ca5b4 100644
      u128 r;
      for (int i = 0; i < 4; i++) {
          uint32_t bits = a._u32[i];
-@@ -473,6 +1192,35 @@ static inline u128 spu_frest(u128 a) {
+@@ -473,6 +1140,35 @@ static inline u128 spu_frest(u128 a) {
      return r;
  }
  
@@ -33183,7 +33169,7 @@ index 0fca7f5..33ca5b4 100644
  /* ---- Phase 3: sign extension ----
   * LE host: low sub-lane = _u8[2i] / _s16[2i] / _s32[2i] (the byte/half/word
   * at the *lower* storage address). Same caveat as the mpy family. */
-@@ -550,11 +1298,17 @@ static inline u128 spu_fsmbi(int32_t imm) {
+@@ -550,11 +1246,17 @@ static inline u128 spu_fsmbi(int32_t imm) {
   * the right host index. Verified to compose correctly with the fixed shufb for
   * both cbd-generated and immediate/LS-constant controls. */
  static inline u128 spu_cbd_pos(int pos) {
@@ -33201,7 +33187,7 @@ index 0fca7f5..33ca5b4 100644
      u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
      int p = (pos & 0xF) & ~1;                       /* SPU halfword byte positions p, p+1 */
      r._u8[SPU_W(p)]   = 0x02;                        /* a SPU byte 2 (hi byte of preferred hw) */
-@@ -562,12 +1316,18 @@ static inline u128 spu_chd_pos(int pos) {
+@@ -562,12 +1264,18 @@ static inline u128 spu_chd_pos(int pos) {
      return r;
  }
  static inline u128 spu_cwd_pos(int pos) {
@@ -33220,7 +33206,7 @@ index 0fca7f5..33ca5b4 100644
      u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
      int p = (pos & 0xF) & ~7;
      for(int k=0;k<8;k++) r._u8[SPU_W(p+k)] = (uint8_t)k;   /* a SPU bytes 0..7 (preferred dword) */
-@@ -588,17 +1348,29 @@ static inline u128 spu_rotma(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++){ ui
+@@ -588,17 +1296,29 @@ static inline u128 spu_rotma(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++){ ui
  static inline u128 spu_rothm(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=(0-b._u16[i])&0x1F; r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); } return r; }
  static inline u128 spu_rothma(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++){ uint32_t sh=(0-b._u16[i])&0x1F; r._s16[i]=(sh>15)?(a._s16[i]>>15):(a._s16[i]>>sh); } return r; }
  static inline u128 spu_rothmi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
@@ -33694,54 +33680,6 @@ index 4f82063..c4ad7ee 100644
                  const uint8_t* L = ctx->ls;
                  #define W(o)  ((L[(o)]<<24)|(L[(o)+1]<<16)|(L[(o)+2]<<8)|L[(o)+3])
                  fprintf(stderr, "[pm-claim] wid=%u spu=%u first=%d claims=%u stages=%u%s halt_pc=0x%05X "
-diff --git a/runtime/spu/tests/test_spu_conversions_neon.c b/runtime/spu/tests/test_spu_conversions_neon.c
-new file mode 100644
-index 0000000..d8cacfd
---- /dev/null
-+++ b/runtime/spu/tests/test_spu_conversions_neon.c
-@@ -0,0 +1,42 @@
-+/* NEON SPU float/int conversions against the exact path, bit for bit, under
-+ * the default FPCR and the SPU one (flush to zero, round toward zero).
-+ * aarch64 only. Build: cc -O2 -ffp-contract=off test_spu_conversions_neon.c */
-+#if !defined(__aarch64__)
-+int main(void) { return 0; }
-+#else
-+volatile long g_spu_xf_exact[8];
-+int g_spu_xf_stats_on;
-+#include "../spu_helpers.h"
-+#include <stdio.h>
-+#include <string.h>
-+#include <stdint.h>
-+static uint64_t st = 0x9E3779B97F4A7C15ull;
-+static uint32_t rnd(void){ st ^= st << 13; st ^= st >> 7; st ^= st << 17; return (uint32_t)st; }
-+static uint32_t pick(void){
-+  static const uint32_t edge[] = {0,0x80000000u,0x7F800000u,0xFF800000u,0x7F7FFFFFu,0x00000001u,0x807FFFFFu,0x00800000u,
-+    0x4B800000u,0x4B7FFFFFu,0xCB800000u,0x4F000000u,0x4EFFFFFFu,0xCF000000u,0x4F800000u,0x7FFFFFFFu,0xFFFFFFFFu,
-+    0x00FFFFFFu,0x01000000u,0xFF000001u,0xFEFFFFFFu,1u,2u,0xFFFFFF00u};
-+  uint32_t r = rnd(); switch (r & 7) {
-+    case 0: return edge[rnd() % (sizeof edge / sizeof edge[0])];
-+    case 1: return rnd() & 0x00FFFFFFu;               /* small ints */
-+    case 2: return (uint32_t)-(int32_t)(rnd() & 0x00FFFFFFu);
-+    case 3: return (rnd() & 0x807FFFFFu) | ((uint32_t)(100 + rnd() % 80) << 23); /* floats near int range */
-+    default: return rnd(); } }
-+static unsigned long long run(const char* tag){
-+  unsigned long long bad = 0, n = 0;
-+  for (int i8 = 0; i8 < 256; i8++) for (int k = 0; k < 40000; k++) {
-+    u128 a; for (int j = 0; j < 4; j++) a._u32[j] = pick();
-+    u128 x, y;
-+    x = spu_cflts(a, i8); y = spu_cflts_exact(a, i8); if (memcmp(&x,&y,16)) { if (bad++ < 5) printf("%s cflts i8=%d %08X -> %08X vs %08X\n",tag,i8,a._u32[0],x._u32[0],y._u32[0]); }
-+    x = spu_cfltu(a, i8); y = spu_cfltu_exact(a, i8); if (memcmp(&x,&y,16)) { if (bad++ < 5) printf("%s cfltu i8=%d %08X -> %08X vs %08X\n",tag,i8,a._u32[0],x._u32[0],y._u32[0]); }
-+    x = spu_csflt(a, i8); y = spu_csflt_exact(a, i8); if (memcmp(&x,&y,16)) { if (bad++ < 5) printf("%s csflt i8=%d %08X -> %08X vs %08X\n",tag,i8,a._u32[0],x._u32[0],y._u32[0]); }
-+    x = spu_cuflt(a, i8); y = spu_cuflt_exact(a, i8); if (memcmp(&x,&y,16)) { if (bad++ < 5) printf("%s cuflt i8=%d %08X -> %08X vs %08X\n",tag,i8,a._u32[0],x._u32[0],y._u32[0]); }
-+    n += 4; }
-+  printf("%s: %llu checks, %llu mismatches\n", tag, n, bad); return bad; }
-+int main(void){
-+  unsigned long long b = run("default FPCR");
-+  unsigned long long v; __asm__ volatile("mrs %0, fpcr":"=r"(v));
-+  __asm__ volatile("msr fpcr, %0"::"r"(v | (1ull<<24) | (3ull<<22)));
-+  b += run("SPU FPCR (FZ, RZ)");
-+  return b != 0; }
-+#endif
 diff --git a/runtime/spu/tests/test_spu_numeric_semantics.c b/runtime/spu/tests/test_spu_numeric_semantics.c
 index 3f233b3..cab64db 100644
 --- a/runtime/spu/tests/test_spu_numeric_semantics.c
@@ -34200,13 +34138,24 @@ index 4240edf..7be5df0 100644
  
      if (flag_id == 0 || flag_id > SYS_EVENT_FLAG_MAX)
 diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
-index 489f8a5..3701b09 100644
+index 489f8a5..7709b7b 100644
 --- a/runtime/syscalls/sys_fs.c
 +++ b/runtime/syscalls/sys_fs.c
-@@ -285,6 +285,19 @@ int64_t sys_fs_open(ppu_context* ctx)
+@@ -7,6 +7,7 @@
+ #include "../memory/vm.h"
+ #include <string.h>
+ #include <stdio.h>
++extern void racit_menu_archive_path(char* path, size_t capacity, int read_only);
+ #include <stdlib.h>
+ #include <errno.h>
+ #include <sys/types.h>
+@@ -284,6 +285,21 @@ int64_t sys_fs_open(ppu_context* ctx)
+     const char* ps3_path = (const char*)vm_to_host(path_addr);
      char host_path[1024];
      sys_fs_translate_path(ps3_path, host_path, sizeof(host_path));
- 
++    racit_menu_archive_path(host_path, sizeof host_path,
++        (flags & (CELL_FS_O_ACCMODE | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND)) == CELL_FS_O_RDONLY);
++
 +    /* racacit: RACACIT_SKIP_MOVIES=1 -- every pre-rendered (Bink) movie is
 +     * skipped: report the .bik as absent and the title plays on exactly as it
 +     * does when a movie file is missing from the disc. Movies open through
@@ -34219,10 +34168,9 @@ index 489f8a5..3701b09 100644
 +          fprintf(stderr, "[movies] skipping %s (RACACIT_SKIP_MOVIES)\n", ps3_path);
 +          return (int64_t)(int32_t)CELL_ENOENT;
 +      } }
-+
+ 
      { extern char* getenv(const char*); if (getenv("FLOW_TITLEOPEN") && ps3_path && strstr(ps3_path, "Titles")) {
          size_t _l = strlen(ps3_path);
-         fprintf(stderr, "[TITLEOPEN] path='%s' (len=%zu, ends_slash=%d) guest_lr=0x%08X\n",
 diff --git a/runtime/syscalls/sys_memory.c b/runtime/syscalls/sys_memory.c
 index bfbaac5..8cedf25 100644
 --- a/runtime/syscalls/sys_memory.c
