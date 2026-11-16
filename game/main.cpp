@@ -925,6 +925,19 @@ static bool alloc_guest_vm(void)
         /* Reserve the 8 GB window inaccessible, then open up only the aligned
          * 4 GB: a writable 8 GB request is refused outright by heuristic
          * overcommit on phones with less RAM than that. */
+#if defined(PPU_FIXED_VM_BASE)
+        /* Fixed-base build (ppu_recomp.h PPU_INL_BASE): the window at the
+         * compile-time address, or refuse. A hint, not MAP_FIXED. */
+        {
+            void* want = (void*)(uintptr_t)(PPU_FIXED_VM_BASE);
+            void* got = mmap(want, (size_t)span, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+            if (got == MAP_FAILED || got != want) { if (got != MAP_FAILED) munmap(got, (size_t)span); return false; }
+            vm_base = (uint8_t*)got;
+            ppu_vm_size = 0;
+            return true;
+        }
+#endif
         void* p = mmap(nullptr, (size_t)(span * 2), PROT_NONE,
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
         if (p == MAP_FAILED) return false;

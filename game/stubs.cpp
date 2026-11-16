@@ -1796,3 +1796,220 @@ extern "C" void racacit_snd_play_hook(ppu_context* ctx, int tag)
     }
     __sync_lock_release(&mu);
 }
+
+/* ---------------------------------------------------------------------------
+ * Update 1.20's level heap budget in the disc build. func_0032C7A4, the level
+ * loader, extends the level pool so a level gets at least a fixed budget past
+ * its image: 0x740000 on the disc for every level. Update 1.20 (func_0032C800)
+ * raised it to 0x820000, and to 0x8A0000 on the five space sectors (levels 3,
+ * 6, 10, 15 and 18). The current level is func_00299EB4's read through the
+ * TOC. RACACIT_U120_BUDGET=0 keeps the disc's value (testing).
+ * -------------------------------------------------------------------------*/
+static uint32_t racacit_cur_level(ppu_context* ctx)
+{
+    const uint32_t t = vm_read32(ctx->gpr[2] - 0x72C8);
+    return vm_read32(vm_read32(t - 0x7FFC));
+}
+extern "C" uint32_t racacit_u120_level_budget(ppu_context* ctx)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("RACACIT_U120_BUDGET"); on = !(e && *e == '0'); }
+    if (!on) return 0x740000u;
+    switch (racacit_cur_level(ctx)) {
+    case 3: case 6: case 10: case 15: case 18: return 0x8A0000u;
+    default: return 0x820000u;
+    }
+}
+/* LOCAL: RACACIT_U120_BUDGET_LOG=1 prints the level pool after the load
+ * extends it ({base, end, cur} at r28), to check the larger budget fits. */
+extern "C" void racacit_u120_budget_log(ppu_context* ctx)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("RACACIT_U120_BUDGET_LOG") ? 1 : 0;
+    if (!on) return;
+    const uint32_t pool = (uint32_t)ctx->gpr[28];
+    const uint32_t base = vm_read32(pool), end = vm_read32(pool + 4), cur = vm_read32(pool + 8);
+    fprintf(stderr, "[u120-budget] level %u pool 0x%08X base 0x%08X end 0x%08X cur 0x%08X free 0x%X%s\n",
+            racacit_cur_level(ctx), pool, base, end, cur, end > cur ? end - cur : 0u, cur > end ? " OVERFLOW" : "");
+}
+
+/* ---------------------------------------------------------------------------
+ * Update 1.20's space-mission bits resync in the disc build. Five bits at
+ * G+0x13D94 (func_002252A4 ORs one in; at 0x1F it unlocks entry 0x1E of the
+ * trophy-style table through func_0029DB40) are set on the disc only by a
+ * level-script command, so a save that finished those missions without the
+ * script setting a bit could never complete the mask. Update 1.20's
+ * func_0047B7E8 (an init method) re-derives two of them from saved mission
+ * flags, read through the game's named-flag lookup (disc func_00245AB4):
+ *   ss4_mission_convoy_completed                     -> bit 8
+ *   ss1_mission_radioactive_space_completed and
+ *   ss1_mission_tow_complete                         -> bit 1
+ * Called at the disc function's return; the flag names (absent from the disc
+ * executable) sit below the guest stack pointer during the calls, and every
+ * register is put back after them. RACACIT_U120_BITS_LOG=1 logs each run.
+ * -------------------------------------------------------------------------*/
+void func_00245AB4(ppu_context* ctx);   /* named flag -> r3 (byte) */
+void func_002252A4(ppu_context* ctx);   /* G+0x13D94 |= r3 */
+extern "C" void racacit_u120_space_bits(ppu_context* ctx)
+{
+    uint64_t gpr[32], lr = ctx->lr, ctr = ctx->ctr; double fpr[32]; u128 vr[32];
+    const uint32_t cr = ctx->cr, xer = ctx->xer, fpscr = ctx->fpscr, vscr = ctx->vscr;
+    memcpy(gpr, ctx->gpr, sizeof gpr); memcpy(fpr, ctx->fpr, sizeof fpr); memcpy(vr, ctx->vr, sizeof vr);
+    const uint32_t sp = (uint32_t)ctx->gpr[1], nsp = (sp - 0x400u) & ~15u, data = nsp + 0x100u;
+    vm_write32(nsp, 0); vm_write32(nsp + 4u, sp);   /* back chain */
+    auto flag = [&](const char* name) -> int {
+        uint32_t i = 0;
+        for (; name[i]; i++) vm_write8(data + i, (uint8_t)name[i]);
+        vm_write8(data + i, 0);
+        ctx->gpr[1] = nsp; ctx->gpr[2] = gpr[2]; ctx->gpr[3] = data; ctx->gpr[4] = 0; ctx->lr = 0x0047B828u;
+        func_00245AB4(ctx); racacit_guest_drain(ctx);
+        return (ctx->gpr[3] & 0xFFu) != 0;
+    };
+    auto set_bit = [&](uint32_t bit) {
+        ctx->gpr[1] = nsp; ctx->gpr[2] = gpr[2]; ctx->gpr[3] = bit; ctx->lr = 0x0047B828u;
+        func_002252A4(ctx); racacit_guest_drain(ctx);
+    };
+    const int convoy = flag("ss4_mission_convoy_completed");
+    if (convoy) set_bit(8u);
+    const int radio = flag("ss1_mission_radioactive_space_completed");
+    const int tow = radio ? flag("ss1_mission_tow_complete") : 0;
+    if (radio && tow) set_bit(1u);
+    static int log = -1;
+    if (log < 0) log = getenv("RACACIT_U120_BITS_LOG") ? 1 : 0;
+    if (log) {
+        const uint32_t g = vm_read32(vm_read32((uint32_t)gpr[2] - 0x7300u) - 0x7FD4u);
+        fprintf(stderr, "[u120-bits] convoy %d radioactive %d tow %d -> mask 0x%02X%c",
+                convoy, radio, tow, vm_read8(g + 0x13D94u), 10);
+    }
+    memcpy(ctx->gpr, gpr, sizeof gpr); memcpy(ctx->fpr, fpr, sizeof fpr); memcpy(ctx->vr, vr, sizeof vr);
+    ctx->cr = cr; ctx->lr = lr; ctx->ctr = ctr; ctx->xer = xer; ctx->fpscr = fpscr; ctx->vscr = vscr;
+}
+
+/* ---------------------------------------------------------------------------
+ * Frame-rate unlock (docs/design/frame-unlock.md). The engine steps by real
+ * elapsed time (g_clock, func_0066A424 Clock_Tick), clamped below by min_dt
+ * (clock+0x04), which every level load sets to 1/60 s: above 60 FPS each
+ * frame would still advance 1/60 s of game time. With RACACIT_FPS_CAP=<fps>
+ * above 60, min_dt is lowered to 1/(2*cap) at every tick (which also undoes
+ * the level-load reset and the frame end's 0.9*min_dt sleep). Off (unset or
+ * <= 60): nothing changes. Every 5 s it logs game time against wall time.
+ * -------------------------------------------------------------------------*/
+/* Frame-rate unlock: a frame counter at 60 per second of unpaused time for
+ * the code that counts frames as time (docs/design/frame-unlock-audit.md
+ * section 2.A). clock+0xD0 counts ticks with dt != 0; v60 advances by the
+ * unscaled dt (clock+0x44) of each such tick in 1/60 s steps, seeded from
+ * clock+0xD0, so at 60 FPS the two move together. racacit_frame60_at(base)
+ * is that counter when `base` is the game clock and a cap above 60 is set,
+ * otherwise the plain load it replaces. */
+static uint32_t s_f60_clk, s_f60_last, s_f60_v; static float s_f60_acc; static int s_f60_seeded, s_f60_new = 1;
+static int racacit_fps_cap(void) { static int c = -1; if (c < 0) { const char* e = getenv("RACACIT_FPS_CAP"); c = e ? atoi(e) : 0; } return c; }
+static void racacit_frame60_tick(uint32_t clk)
+{
+    s_f60_clk = clk;
+    const uint32_t d0 = vm_read32(clk + 0xD0u);
+    if (!s_f60_seeded) { s_f60_v = s_f60_last = d0; s_f60_seeded = 1; return; }
+    if (d0 < s_f60_last) { s_f60_v = s_f60_last = d0; s_f60_acc = 0.0f; return; }   /* Clock_Init reset it (level load): follow */
+    if (d0 == s_f60_last) return;                 /* paused: the real counter did not move either */
+    s_f60_last = d0;
+    s_f60_acc += racacit_rdf(clk + 0x44u);        /* the previous tick's unscaled dt */
+    const uint32_t before = s_f60_v;
+    while (s_f60_acc >= 1.0f / 60.0f) { s_f60_v++; s_f60_acc -= 1.0f / 60.0f; }
+    s_f60_new = s_f60_v != before;
+}
+/* "Every N frames" gates (audit section 2.B): 1 on frames where the 60 Hz
+ * counter advanced, so a gate fires at most once per 1/60 s of game time;
+ * always 1 without a cap above 60. */
+static unsigned long long s_g60_calls, s_g60_pass;
+extern "C" int racacit_new60(void)
+{
+    const int r = racacit_fps_cap() <= 60 || s_f60_new;
+    s_g60_calls++; s_g60_pass += (unsigned)r;
+    return r;
+}
+extern "C" uint32_t racacit_frame60_at(uint32_t base)
+{
+    if (racacit_fps_cap() <= 60 || base != s_f60_clk || !s_f60_seeded) return vm_read32(base + 0xD0u);
+    static unsigned long long n; static unsigned long long t0;
+    if (getenv("RACACIT_CLOCK_LOG")) {
+        n++;
+        const unsigned long long w = (unsigned long long)std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (!t0) t0 = w;
+        if (w - t0 >= 5) { fprintf(stderr, "[frame60] v60 %u real %u, %llu reads, gates %llu due / %llu fired in 5 s%c", s_f60_v, vm_read32(base + 0xD0u), n, s_g60_calls, s_g60_pass, 10); t0 = w; n = 0; s_g60_calls = s_g60_pass = 0; }
+    }
+    return s_f60_v;
+}
+
+extern "C" void racacit_clock_tick(ppu_context* ctx)
+{
+    static int cap = -1;
+    if (cap < 0) { const char* e = getenv("RACACIT_FPS_CAP"); cap = e ? atoi(e) : 0; }
+    static int log = -1;
+    if (log < 0) log = (cap > 60 || getenv("RACACIT_CLOCK_LOG")) ? 1 : 0;
+    const uint32_t clk = (uint32_t)ctx->gpr[3];
+    racacit_frame60_tick(clk);
+    if (cap > 60) {
+        const float want = 1.0f / (2.0f * (float)cap);
+        if (racacit_rdf(clk + 0x04u) > want) racacit_wrf(clk + 0x04u, want);
+    }
+    if (!log) return;
+    static unsigned long long w0; static float r0, g0; static uint32_t n0;
+    const unsigned long long w = (unsigned long long)std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const float r = racacit_rdf(clk + 0x24u), g = racacit_rdf(clk + 0x84u);
+    const uint32_t n = vm_read32(clk + 0xD0u);
+    if (!w0) { w0 = w; r0 = r; g0 = g; n0 = n; return; }
+    if (w - w0 < 5000000ull) return;
+    const double dw = (double)(w - w0) / 1e6;
+    fprintf(stderr, "[clock] 5 s: real %.3f game %.3f (x wall), %.1f ticked frames/s, min_dt %.5f max_dt %.4f mode %u%c",
+            (r - r0) / dw, (g - g0) / dw, (double)(n - n0) / dw, racacit_rdf(clk + 0x04u), racacit_rdf(clk + 0x08u),
+            vm_read32(clk), 10);
+    w0 = w; r0 = r; g0 = g; n0 = n;
+}
+/* Diagnostic: the sync mode func_00661650 sets (0..5; see the design doc). */
+extern "C" void racacit_sync_mode(ppu_context* ctx)
+{
+    static int log = -1;
+    if (log < 0) log = getenv("RACACIT_CLOCK_LOG") || getenv("RACACIT_FPS_CAP") ? 1 : 0;
+    if (log) fprintf(stderr, "[sync] mode %u (lr 0x%08X)%c", (uint32_t)ctx->gpr[3], (uint32_t)ctx->lr, 10);
+}
+
+/* ---------------------------------------------------------------------------
+ * Frame-rate unlock, step 2: the CPU frame limiter func_005C4C00 (sync mode
+ * 0 states: menus, some cutscenes). It waits until a timebase deadline
+ * (display+0x2D8; display = TOC-0x5120 -> -0x7FF8), then advances it by
+ * f1 x display+0x20 (the refresh period, 1/59.94 s) x 79.8 MHz, or restarts
+ * it from now if the frame was late; display+0x2E0 keeps the slack. With
+ * RACACIT_FPS_CAP above 60 this replaces it at its head with the same logic
+ * at a 1/cap period (f1 keeps the half-rate states at half rate) and a host
+ * sleep instead of 50 us polls. Returns 0 (run the original) otherwise.
+ * -------------------------------------------------------------------------*/
+#include <unistd.h>
+extern "C" uint64_t ppu_timebase_now(void);
+static uint64_t racacit_rd64(uint32_t ea) { return ((uint64_t)vm_read32(ea) << 32) | vm_read32(ea + 4u); }
+static void racacit_wr64(uint32_t ea, uint64_t v) { vm_write32(ea, (uint32_t)(v >> 32)); vm_write32(ea + 4u, (uint32_t)v); }
+extern "C" int racacit_frame_limit(ppu_context* ctx)
+{
+    static int cap = -1;
+    if (cap < 0) { const char* e = getenv("RACACIT_FPS_CAP"); cap = e ? atoi(e) : 0; }
+    if (cap <= 60) return 0;
+    const uint32_t disp = vm_read32(vm_read32((uint32_t)ctx->gpr[2] - 0x5120u) - 0x7FF8u);
+    const double f = ctx->fpr[1];
+    const uint64_t period = (uint64_t)(f / (double)cap * 79800000.0);
+    uint64_t now = ppu_timebase_now();
+    uint64_t dl = racacit_rd64(disp + 0x2D8u);
+    if (now < dl) {
+        racacit_wr64(disp + 0x2E0u, dl - now);
+        while (now < dl) {
+            const uint64_t left_us = (dl - now) * 1000000ull / 79800000ull;
+            if (left_us > 200) usleep((useconds_t)(left_us - 100));
+            now = ppu_timebase_now();
+        }
+        dl += period;
+    } else {
+        racacit_wr64(disp + 0x2E0u, 0);
+        dl = now + period;
+    }
+    racacit_wr64(disp + 0x2D8u, dl);
+    return 1;
+}
