@@ -246,7 +246,6 @@ static const char* g_rsx_name      = "null (headless software)";
  * capped by a software Vulkan device. The Windows build otherwise keeps its
  * Vulkan-or-error behaviour. */
 extern "C" int  xb_null_init(uint32_t, uint32_t, const char*) __asm__("rsx_null_backend_init");
-extern "C" void xb_null_present(void) __asm__("rsx_null_backend_present");
 extern "C" int  xb_null_pump(void) __asm__("rsx_null_backend_pump_messages");
 #  endif
 static int rsx_backend_init_linux(uint32_t w, uint32_t h, const char* title)
@@ -254,7 +253,7 @@ static int rsx_backend_init_linux(uint32_t w, uint32_t h, const char* title)
 #  if defined(_WIN32)
     { const char* s = getenv("RACACIT_RSX");
       if (s && strcmp(s, "null") == 0) {
-          g_rsx_present = xb_null_present; g_rsx_pump = xb_null_pump;
+          g_rsx_present = rsx_none_present;   /* the Win32 null backend presents from its pump */ g_rsx_pump = xb_null_pump;
           g_rsx_name = "null (Win32 GDI)";
           return xb_null_init(w, h, title);
       } }
