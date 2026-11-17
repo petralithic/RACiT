@@ -80,8 +80,9 @@ def game_profile_id():
 
 GAME_PROFILE = game_profile_id()
 
-# The third-person follow camera's update, per executable (game/desktop_mouse.cpp).
-FOLLOW_CAMERA = {'BCUS98124-1.00': 'func_000459D4'}
+# The third-person follow camera's update and the rotation it calls with the
+# yaw step, per executable (game/desktop_mouse.cpp).
+FOLLOW_CAMERA = {'BCUS98124-1.00': ('func_000459D4', 'func_00633C34')}
 if GAME_PROFILE not in FOLLOW_CAMERA:
     print('patch_lift: no follow-camera address for %s; the mouse turns the camera through the right stick'
           % (GAME_PROFILE or 'an unidentified executable'))
@@ -579,7 +580,7 @@ def patch_file(path):
     #     in the game's limits (r30 - 0x7F24 / - 0x7F1C) before the game wraps
     #     it, so a fast swipe cannot jump past a limit. With no mouse motion
     #     racit_camera_take returns 0 and nothing changes.
-    camera = FOLLOW_CAMERA.get(GAME_PROFILE)
+    camera, rotate = FOLLOW_CAMERA.get(GAME_PROFILE, (None, None))
     sp = func_span(src, camera) if camera else None
     if sp and 'racit_camera_take' not in src[sp[0]:sp[2]]:
         a_, body_, end_ = sp
@@ -589,9 +590,9 @@ def patch_file(path):
              'void %s(ppu_context* ctx) {\n'
              '        double mouse_angles[2];   /* racacit: mouse camera */\n'
              '        const int mouse_turn = racit_camera_take(mouse_angles);\n' % camera),
-            ('        ctx->lr = 0x00045D6C; func_00633C34(ctx); DRAIN_TRAMPOLINE(ctx);\n',
+            ('        ctx->lr = 0x00045D6C; %s(ctx); DRAIN_TRAMPOLINE(ctx);\n' % rotate,
              '        if (mouse_turn) ctx->fpr[1] -= mouse_angles[0];\n'
-             '        ctx->lr = 0x00045D6C; func_00633C34(ctx); DRAIN_TRAMPOLINE(ctx);\n'),
+             '        ctx->lr = 0x00045D6C; %s(ctx); DRAIN_TRAMPOLINE(ctx);\n' % rotate),
             ('        ctx->fpr[3] = ppu_fp_single(ppu_fsub(ctx->fpr[31], ctx->fpr[1]));\n',
              '        if (mouse_turn) {\n'
              '            uint32_t lb = vm_read32(ctx->gpr[30] + -0x7F24), hb = vm_read32(ctx->gpr[30] + -0x7F1C);\n'
