@@ -56,8 +56,7 @@ def main():
         source = (ROOT / 'game' / name).read_text(encoding='utf-8')
         if update:
             if name == 'stubs.cpp':
-                for begin, finish in (('// Disc-only intro hook begins.', '// Disc-only intro hook ends.'),
-                                      ('// Disc-only 1.20 fixes begin.', '// Disc-only 1.20 fixes end.')):
+                for begin, finish in (('// Disc-only 1.20 fixes begin.', '// Disc-only 1.20 fixes end.'),):
                     start = source.index(begin)
                     end = source.index(finish, start) + len(finish)
                     source = source[:start] + source[end:]
