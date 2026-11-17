@@ -1,0 +1,95 @@
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -353,29 +353,42 @@
+  * ===========================================================================*/
+ #define SPU_MAX_CONTEXTS 8
+ 
+-typedef struct {
+-    spu_context* volatile ctx;
+-    mfc_engine   mfc;
+-} spu_mfc_slot;
+-
+-static spu_mfc_slot s_mfc_slots[SPU_MAX_CONTEXTS];
++/* The owner pointers and the engines live apart, each engine on its own
++ * 128-byte line (Apple's cache line; two of x86's). They used to share one
++ * array of {ctx, engine} slots, so the tail of slot k-1's engine -- its
++ * tag_completed word, written by every transfer that SPU makes -- sat on the
++ * same line as slot k's owner pointer, which every lookup scans past. Each
++ * MFC channel access of every lane above slot 0 then missed on lines its
++ * neighbours kept writing (a lookup per wrch: six or seven per DMA). The
++ * owners are written only on claim and release, so their line stays shared
++ * in every reader's cache. */
++#if defined(_MSC_VER) && !defined(__clang__)
++#define SPU_MFC_ALIGN __declspec(align(128))
++#else
++#define SPU_MFC_ALIGN __attribute__((aligned(128)))
++#endif
++typedef struct { SPU_MFC_ALIGN mfc_engine mfc; } spu_mfc_engine_line;
++typedef struct { SPU_MFC_ALIGN spu_context* volatile ctx[SPU_MAX_CONTEXTS]; } spu_mfc_owner_line;
++static spu_mfc_owner_line  s_mfc_owners;       /* sized to whole lines: nothing else shares them */
++#define s_mfc_owner s_mfc_owners.ctx
++static spu_mfc_engine_line s_mfc_eng[SPU_MAX_CONTEXTS];
+ static SRWLOCK      s_mfc_claim_lock = SRWLOCK_INIT;
+ 
+ static mfc_engine* mfc_for(spu_context* ctx)
+ {
+     for (int i = 0; i < SPU_MAX_CONTEXTS; i++)
+-        if (s_mfc_slots[i].ctx == ctx)
+-            return &s_mfc_slots[i].mfc;
++        if (s_mfc_owner[i] == ctx)
++            return &s_mfc_eng[i].mfc;
+ 
+     /* No slot yet: take one. The engine is initialized before the slot is
+      * published, so it is never visible to anyone in a half-reset state. */
+     mfc_engine* e = NULL;
+     AcquireSRWLockExclusive(&s_mfc_claim_lock);
+     for (int i = 0; i < SPU_MAX_CONTEXTS && !e; i++) {
+-        if (s_mfc_slots[i].ctx != NULL) continue;
+-        mfc_engine_init(&s_mfc_slots[i].mfc);
+-        s_mfc_slots[i].ctx = ctx;
+-        e = &s_mfc_slots[i].mfc;
++        if (s_mfc_owner[i] != NULL) continue;
++        mfc_engine_init(&s_mfc_eng[i].mfc);
++        s_mfc_owner[i] = ctx;
++        e = &s_mfc_eng[i].mfc;
+     }
+     if (!e) {
+         /* Out of slots: fall back to a shared engine (correct for single-SPU).
+@@ -413,8 +426,8 @@
+     if (!ctx) return;
+     AcquireSRWLockExclusive(&s_mfc_claim_lock);
+     for (int i = 0; i < SPU_MAX_CONTEXTS; i++) {
+-        if (s_mfc_slots[i].ctx != ctx) continue;
+-        s_mfc_slots[i].ctx = NULL;
++        if (s_mfc_owner[i] != ctx) continue;
++        s_mfc_owner[i] = NULL;
+         break;
+     }
+     ReleaseSRWLockExclusive(&s_mfc_claim_lock);
+@@ -3740,6 +3753,11 @@
+ static _Thread_local uint32_t s_dring_i;
+ void spu_dma_ring_note(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size)
+ {
++    /* Every SPU transfer lands here, and on macOS each thread-local access is
++     * a _tlv_get_addr call: keep the ring only when asked, SPU_DMA_RING=1. */
++    static int s_on = -1;
++    if (__builtin_expect(s_on < 0, 0)) s_on = getenv("SPU_DMA_RING") ? 1 : 0;
++    if (!s_on) return;
+     const uint32_t k = s_dring_i++ & 127u;
+     s_dring[k].cmd = cmd; s_dring[k].lsa = lsa; s_dring[k].ea = ea; s_dring[k].size = size;
+ }
+--- a/runtime/spu/spu_dma.h
++++ b/runtime/spu/spu_dma.h
+@@ -839,7 +839,11 @@
+         { uint32_t e = (uint32_t)ea;
+           int hitregion = (e < 0x40005000u && e + size > 0x40003000u);
+           int haspoison = 0;
+-          for (uint32_t o = 0; o + 4 <= size; o += 4) {
++          /* The word scan reads every byte of every PUT again -- a quarter of
++           * this function's time in A Crack in Time's per-frame jobs -- for a
++           * log line, so it runs only when asked: SPU_POISON_DMA=1. */
++          static int s_pz = -1; if (s_pz < 0) s_pz = getenv("SPU_POISON_DMA") ? 1 : 0;
++          if (s_pz) for (uint32_t o = 0; o + 4 <= size; o += 4) {
+               uint32_t w; memcpy(&w, (const char*)ls_ptr + o, 4);
+               if (w == 0x08C708C7u) { haspoison = 1; break; } /* 0xC708C708 BE in LS bytes */
+           }
