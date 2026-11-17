@@ -1,0 +1,170 @@
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1593,6 +1593,9 @@
+ #endif
+     struct spurs_lane_arg* a = (struct spurs_lane_arg*)p;
+     unsigned idle = 0;
++#ifdef __APPLE__
++    { extern void racacit_thread_qos(const char*); racacit_thread_qos("SPU"); }
++#endif
+     { char _hb[160]; snprintf(_hb, sizeof _hb, "[hosttid] %lu spurs lane wid=%u spu=%u%c", (unsigned long)GetCurrentThreadId(), a->wid, a->spu_num, 10); fputs(_hb, stderr); }
+ #ifdef _WIN32
+     /* PS3_SAMPLE_SPURS=<n>: the sampler profiles lane n-1 (of the first
+@@ -1682,6 +1685,9 @@
+ 
+ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+ {
++#ifdef __APPLE__
++    { extern void racacit_thread_qos(const char*); racacit_thread_qos("SPUK"); }
++#endif
+     { char _hb[160]; snprintf(_hb, sizeof _hb, "[hosttid] %lu spurs kernel%c", (unsigned long)GetCurrentThreadId(), 10); fputs(_hb, stderr); }
+ #ifdef _WIN32
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
+--- a/libs/video/rsx_vulkan_backend.c
++++ b/libs/video/rsx_vulkan_backend.c
+@@ -672,6 +672,10 @@
+  * blocks' total and their count. A block goes back to the driver only when
+  * nothing in it is live, so blocks that keep being added while `live` stays
+  * well below the total means pieces scattered over them (fragmentation). */
++/* Vulkan object creations so far (the RSX_ENG_STATS counters: 0 image,
++ * 1 memory, 2 framebuffer, 3 sampler, 4 view, 5 pipeline, 6 buffer); they
++ * only reset when RSX_ENG_STATS prints. For per-frame hitch attribution. */
++unsigned long long rsx_vk_create_count(int k) { return (k >= 0 && k < 8) ? s_vkc[k] : 0; }
+ void rsx_vk_pool_stats(unsigned long long* live, unsigned long long* cap, unsigned* blocks)
+ {
+     unsigned long long l = 0; unsigned n = 0;
+--- a/runtime/platform/win32_compat.c
++++ b/runtime/platform/win32_compat.c
+@@ -2018,7 +2018,36 @@
+ #else  /* _WIN32 */
+ /* Nothing to build: the header is a passthrough to <windows.h> there. */
+ typedef int ps3_win32_compat_not_needed_on_windows;
++#endif
++
++/* racacit: RACACIT_<ROLE>_QOS=ui|init|def|util for the calling thread on
++ * Apple Silicon, where QoS decides P- vs E-core and preemption order (role:
++ * SPU, PPU, RSX); RACACIT_QOS_LOG=1 prints each thread's class at start.
++ * A no-op elsewhere and when unset. */
++#ifdef __APPLE__
++#include <pthread/qos.h>
+ #endif
++void racacit_thread_qos(const char* role)
++{
++#ifdef __APPLE__
++    char name[40]; snprintf(name, sizeof name, "RACACIT_%s_QOS", role);
++    const char* e = getenv(name);
++    if (e && *e) {
++        qos_class_t q = QOS_CLASS_DEFAULT;
++        if (!strcmp(e, "ui")) q = QOS_CLASS_USER_INTERACTIVE;
++        else if (!strcmp(e, "init")) q = QOS_CLASS_USER_INITIATED;
++        else if (!strcmp(e, "util")) q = QOS_CLASS_UTILITY;
++        pthread_set_qos_class_self_np(q, 0);
++    }
++    if (getenv("RACACIT_QOS_LOG")) {
++        qos_class_t q = qos_class_self();
++        fprintf(stderr, "[qos] %s thread: class 0x%X%c", role, (unsigned)q, 10);
++    }
++#else
++    (void)role;
++#endif
++}
++
+ /* The runtime's yield (Sleep(0), SwitchToThread, the SPU lock-line spin).
+  * On macOS sched_yield is swtch_pri(0), which also depresses the caller's
+  * priority for a scheduler quantum: with more runnable threads than cores
+--- a/runtime/spu/spu_coherency.c
++++ b/runtime/spu/spu_coherency.c
+@@ -89,6 +89,7 @@
+ #else
+ #include <stdatomic.h>
+ #include <sched.h>
++#include <pthread.h>
+ void racacit_yield(void);   /* win32_compat.c: sched_yield without the macOS priority depression */
+ static atomic_int g_lockline;
+ #if defined(__aarch64__) || defined(__arm64__)
+@@ -105,10 +106,31 @@
+  * lanes) a holder that lost its CPU left the others hammering until it got
+  * one back. SPU_LL_SPIN=<n>: reads before yielding (default 2048). */
+ static int s_ll_spin = -1;
++/* SPU_LL_STATS: when the lock was taken (hold times are measured at unlock). */
++static int s_ll_st = -1;
++static unsigned long spu_ll_tid(void)
++{
++#ifdef __APPLE__
++    uint64_t t = 0; pthread_threadid_np(NULL, &t); return (unsigned long)t;   /* = GetCurrentThreadId, as in the [hosttid] lines */
++#else
++    return 0;
++#endif
++}
++static unsigned long long s_ll_acq;
++static inline void spu_ll_note_acq(void)
++{
++    if (s_ll_st < 0) s_ll_st = getenv("SPU_LL_STATS") ? 1 : 0;
++    if (s_ll_st) { extern unsigned long long ps3_qpc_us(void); s_ll_acq = ps3_qpc_us(); }
++}
+ void spu_lockline_lock(void)
+ {
+-    if (!atomic_exchange_explicit(&g_lockline, 1, memory_order_acquire)) return;
++    if (!atomic_exchange_explicit(&g_lockline, 1, memory_order_acquire)) { spu_ll_note_acq(); return; }
+     if (s_ll_spin < 0) { const char* e = getenv("SPU_LL_SPIN"); s_ll_spin = e ? atoi(e) : 2048; if (s_ll_spin < 1) s_ll_spin = 1; }
++    /* SPU_LL_STATS=1: contended acquisitions every 5 s -- how many, how many
++     * waited >= 1 ms, and the longest (a holder off its CPU stalls everyone). */
++    static int s_st = -1; if (s_st < 0) s_st = getenv("SPU_LL_STATS") ? 1 : 0;
++    extern unsigned long long ps3_qpc_us(void);
++    const unsigned long long t0 = s_st ? ps3_qpc_us() : 0;
+     unsigned spins = 0;
+     do {
+         while (atomic_load_explicit(&g_lockline, memory_order_relaxed)) {
+@@ -116,8 +138,27 @@
+             if (++spins >= (unsigned)s_ll_spin) { spins = 0; racacit_yield(); }
+         }
+     } while (atomic_exchange_explicit(&g_lockline, 1, memory_order_acquire));
++    if (s_st) {
++        static unsigned long long n, slow, mx, last; const unsigned long long t = ps3_qpc_us(), d = t - t0;
++        n++; if (d >= 1000) { slow++; extern void ps3_tl_at(unsigned long long, char, uint32_t, uint32_t); ps3_tl_at(t0, 'K', 0x11u, (uint32_t)d); } if (d > mx) mx = d;
++        if (!last) last = t;
++        if (t - last > 5000000ull) { fprintf(stderr, "[ll-wait] 5 s: %llu contended, %llu >= 1 ms, longest %llu us%c", n, slow, mx, 10); n = slow = mx = 0; last = t; }
++    }
++    spu_ll_note_acq();
+ }
+-void spu_lockline_unlock(void) { atomic_store_explicit(&g_lockline, 0, memory_order_release); }
++void spu_lockline_unlock(void)
++{
++    if (s_ll_st > 0) {
++        extern unsigned long long ps3_qpc_us(void);
++        const unsigned long long d = ps3_qpc_us() - s_ll_acq;
++        if (d >= 1000) {
++            static int told; char nm[64] = "?";
++            pthread_getname_np(pthread_self(), nm, sizeof nm);
++            if (told++ < 200) fprintf(stderr, "[ll-hold] %llu us by thread \"%s\" tid %lu%c", d, nm, spu_ll_tid(), 10);
++        }
++    }
++    atomic_store_explicit(&g_lockline, 0, memory_order_release);
++}
+ void spu_spin_wait(volatile long* lock)
+ {
+     unsigned spins = 0;
+--- a/runtime/syscalls/lv2_register.c
++++ b/runtime/syscalls/lv2_register.c
+@@ -741,6 +741,9 @@
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }  /* let SO reach the reporter */
+ #endif
+     spu_thread_t* t = (spu_thread_t*)arg;
++#ifdef __APPLE__
++    { extern void racacit_thread_qos(const char*); racacit_thread_qos("SPU"); }
++#endif
+     spu_lifted_thread_result r;
+     spu_lifted_thread_run(t->sctx, &r);
+     t->exit_status = r.exit_status;
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -204,6 +204,9 @@
+ #endif
+ {
+     ppu_thread_info* info = (ppu_thread_info*)param;
++#ifdef __APPLE__
++    { extern void racacit_thread_qos(const char*); racacit_thread_qos("PPU"); }
++#endif
+ 
+ #ifdef _WIN32
+     /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the

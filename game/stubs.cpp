@@ -1240,6 +1240,17 @@ static int rac_main_stats(void) { static int v = -1; if (v < 0) v = getenv("RACA
 static thread_local int t_ms_depth;    /* only the main thread ever raises it */
 static unsigned long long s_ms_w0, s_ms_spu, s_ms_spu_sc, s_ms_lim, s_ms_frames, s_ms_t0, s_ms_cpu0, s_ms_sc;
 static struct { uint32_t num, lr; unsigned long long us; unsigned n; } s_ms_sct[48];
+/* Per frame (RACACIT_MAIN_STATS): a frame-time histogram every 5 s and one
+ * [slow-frame] line for each frame of at least RACACIT_SLOW_FRAME_MS (25):
+ * its CPU time, SPU waits (count, longest and its lr), syscalls (the costliest
+ * number@lr in it), the rest, and what the RSX side did meanwhile (drain
+ * time, Vulkan pipelines/images/memory created). */
+static unsigned long long s_pf_t0, s_pf_cpu0, s_pf_spu, s_pf_wmax, s_pf_sc, s_pf_drain0, s_pf_cnt0[3], s_pf_start;
+static uint32_t s_pf_wlr, s_ms_wlr; static unsigned s_pf_wn;
+static struct { uint32_t num, lr; unsigned long long us; } s_pf_sct[8];
+static unsigned s_pf_hist[9], s_pf_logged;
+extern "C" unsigned long long g_rt_drain_total_us;
+extern "C" unsigned long long rsx_vk_create_count(int k);
 static unsigned long long rac_thread_cpu_us(void)
 {
 #ifdef __APPLE__
@@ -1255,15 +1266,45 @@ static void rac_ms_sc(ppu_context* ctx, uint32_t num, unsigned long long us)
     if (t_ms_depth > 0) { s_ms_spu_sc += us; return; }
     s_ms_sc += us;
     const uint32_t lr = (uint32_t)ctx->lr;
+    s_pf_sc += us;
+    { int j = 0; for (; j < 8; j++) if ((s_pf_sct[j].num == num && s_pf_sct[j].lr == lr) || !s_pf_sct[j].us) break;
+      if (j < 8) { s_pf_sct[j].num = num; s_pf_sct[j].lr = lr; s_pf_sct[j].us += us; } }
     int k = 0;
     for (; k < 48; k++) if ((s_ms_sct[k].num == num && s_ms_sct[k].lr == lr) || !s_ms_sct[k].n) break;
     if (k < 48) { s_ms_sct[k].num = num; s_ms_sct[k].lr = lr; s_ms_sct[k].us += us; s_ms_sct[k].n++; }
 }
 __attribute__((constructor)) static void rac_ms_install(void) { if (rac_main_stats()) g_ppu_sc_time_hook = rac_ms_sc; }
+static void rac_pf_frame(unsigned long long now, unsigned long long cpu)
+{
+    static long thr = -1;
+    if (thr < 0) { const char* e = getenv("RACACIT_SLOW_FRAME_MS"); thr = e ? atol(e) : 25; }
+    const unsigned long long drain = g_rt_drain_total_us;
+    const unsigned long long c[3] = { rsx_vk_create_count(5), rsx_vk_create_count(0), rsx_vk_create_count(1) };
+    if (s_pf_t0) {
+        const unsigned long long w = now - s_pf_t0;
+        static const unsigned edge[8] = { 10000, 13000, 16700, 20000, 25000, 33300, 50000, 100000 };
+        int b = 0; while (b < 8 && w >= edge[b]) b++;
+        s_pf_hist[b]++;
+        if (thr > 0 && w >= (unsigned long long)thr * 1000ull && s_pf_logged < 40) {
+            s_pf_logged++;
+            int k = -1; for (int j = 0; j < 8 && s_pf_sct[j].us; j++) if (k < 0 || s_pf_sct[j].us > s_pf_sct[k].us) k = j;
+            fprintf(stderr, "[slow-frame] t=%.2fs %.1f ms: cpu %.1f | spu %.1f (%u waits, longest %.2f @%08X) | sc %.1f (top %X@%08X %.1f) | rest %.1f | rsx drain %.1f ms, new pipelines %llu images %llu mem %llu%c",
+                    (now - s_pf_start) / 1e6, w / 1e3, (cpu - s_pf_cpu0) / 1e3, s_pf_spu / 1e3, s_pf_wn, s_pf_wmax / 1e3, s_pf_wlr,
+                    s_pf_sc / 1e3, k >= 0 ? s_pf_sct[k].num : 0u, k >= 0 ? s_pf_sct[k].lr : 0u, k >= 0 ? s_pf_sct[k].us / 1e3 : 0.0,
+                    (double)(w - s_pf_spu - s_pf_sc) / 1e3, (drain - s_pf_drain0) / 1e3,
+                    c[0] - s_pf_cnt0[0], c[1] - s_pf_cnt0[1], c[2] - s_pf_cnt0[2], 10);
+        }
+    } else s_pf_start = now;
+    s_pf_t0 = now; s_pf_cpu0 = cpu; s_pf_drain0 = drain;
+    for (int j = 0; j < 3; j++) s_pf_cnt0[j] = c[j];
+    s_pf_spu = s_pf_wmax = s_pf_sc = 0; s_pf_wn = 0; s_pf_wlr = 0;
+    memset(s_pf_sct, 0, sizeof s_pf_sct);
+}
 static void rac_ms_frame(ppu_context* ctx)
 {
     if (!rac_main_stats() || ctx != g_racacit_main_ctx) return;
     const unsigned long long now = rac_us(), cpu = rac_thread_cpu_us();
+    rac_pf_frame(now, cpu);
     s_ms_frames++;
     if (!s_ms_t0) { s_ms_t0 = now; s_ms_cpu0 = cpu; s_ms_frames = 0; return; }
     if (now - s_ms_t0 < 5000000ull) return;
@@ -1279,6 +1320,9 @@ static void rac_ms_frame(ppu_context* ctx)
         s_ms_sct[b].us = 0;
     }
     fprintf(stderr, "%c", 10);
+    fprintf(stderr, "[frame-hist] <10 %u, 10-13 %u, 13-16.7 %u, 16.7-20 %u, 20-25 %u, 25-33 %u, 33-50 %u, 50-100 %u, >=100 ms %u%c",
+            s_pf_hist[0], s_pf_hist[1], s_pf_hist[2], s_pf_hist[3], s_pf_hist[4], s_pf_hist[5], s_pf_hist[6], s_pf_hist[7], s_pf_hist[8], 10);
+    memset(s_pf_hist, 0, sizeof s_pf_hist); s_pf_logged = 0;
     memset(s_ms_sct, 0, sizeof s_ms_sct);
     s_ms_spu = s_ms_spu_sc = s_ms_lim = s_ms_sc = s_ms_frames = 0;
     s_ms_t0 = now; s_ms_cpu0 = cpu;
@@ -1353,7 +1397,7 @@ extern "C" void racacit_wait_begin(ppu_context* ctx)
     /* The main game thread's context, for the stall watch (main.cpp): it is
      * the one that waits on MobyPreRender every frame. */
     if ((uint32_t)ctx->lr == 0x006459D0u) { g_racacit_main_ctx = ctx; racacit_lua_file(ctx, s_lua_main); }
-    if (rac_main_stats() && ctx == g_racacit_main_ctx && t_ms_depth++ == 0) s_ms_w0 = rac_us();
+    if (rac_main_stats() && ctx == g_racacit_main_ctx && t_ms_depth++ == 0) { s_ms_w0 = rac_us(); s_ms_wlr = (uint32_t)ctx->lr; }
     if (!rac_wait_stats()) return;
     if (t_wait_depth++ == 0) {
         t_wait_t0 = rac_us(); t_wait_lr = (uint32_t)ctx->lr;
@@ -1377,7 +1421,11 @@ extern "C" void racacit_wait_begin(ppu_context* ctx)
 
 extern "C" void racacit_wait_end(void)
 {
-    if (rac_main_stats() && t_ms_depth > 0 && --t_ms_depth == 0) s_ms_spu += rac_us() - s_ms_w0;
+    if (rac_main_stats() && t_ms_depth > 0 && --t_ms_depth == 0) {
+        const unsigned long long d = rac_us() - s_ms_w0;
+        s_ms_spu += d; s_pf_spu += d; s_pf_wn++;
+        if (d > s_pf_wmax) { s_pf_wmax = d; s_pf_wlr = s_ms_wlr; }
+    }
     if (!rac_wait_stats() || t_wait_depth <= 0 || --t_wait_depth != 0) return;
     const unsigned long long now = rac_us(), d = now - t_wait_t0;
     g_racacit_main_wait_lr = 0;

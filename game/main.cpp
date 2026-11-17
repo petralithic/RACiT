@@ -178,6 +178,7 @@ int      cellGcm_take_flip_pending(void);
 void     cellGcm_rsx_process_fifo(void);      /* drain get -> put */
 unsigned cellGcm_flip_request_count(void);
 extern void (*g_gcm_wake_walker)(void);       /* wake frame_clock for a drain now */
+extern "C" void racacit_thread_qos(const char* role);   /* win32_compat.c: RACACIT_<ROLE>_QOS */
 }
 
 /* ---------------------------------------------------------------------------
@@ -580,6 +581,9 @@ static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
     if (!title || !*title) title = "ps3recomp";
+#ifdef __APPLE__
+    racacit_thread_qos("RSX");
+#endif
 #if defined(_WIN32) || defined(__ANDROID__)
     s_walker_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
     g_gcm_wake_walker = walker_wake;
@@ -1565,6 +1569,9 @@ extern "C" int racacit_entry(void)
 
 int main(int argc, char** argv)
 {
+#ifdef __APPLE__
+    racacit_thread_qos("MAIN");   /* the boot thread, which becomes the game's main thread */
+#endif
 #if defined(__APPLE__) && defined(RACACIT_HAVE_VULKAN)
     /* Preserve IEEE shader guards before SDL or the Vulkan loader starts.
      * Pending asynchronous pipelines currently skip draws in this backend. */
