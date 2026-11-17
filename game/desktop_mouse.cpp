@@ -12,6 +12,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
 std::atomic<bool> captured{false};
@@ -58,9 +60,28 @@ extern "C" int racit_camera_feed(int dx, int dy, int capture, int sensitivity, i
 /* Follow-camera update (guest thread). angles[0] = yaw, angles[1] = pitch, in
  * radians, consumed. Returns 0 when there is nothing to add, so the game's own
  * values pass through unchanged. */
+/* LOCAL test: RACIT_TEST_MOUSE=<file> holding "dx dy" counts per camera update. */
+static void racit_test_mouse(void)
+{
+    static const char* path = getenv("RACIT_TEST_MOUSE");
+    static unsigned calls; static int tdx, tdy; static double sum_yaw, sum_pitch;
+    if (!path) return;
+    if (calls++ % 30 == 0) {
+        FILE* f = fopen(path, "r"); int a = 0, b = 0;
+        if (f) { if (fscanf(f, "%d %d", &a, &b) != 2) a = b = 0; fclose(f); }
+        tdx = a; tdy = b;
+        fprintf(stderr, "[mousecam-test] calls %u input %d %d applied yaw %.4f pitch %.4f\n", calls, tdx, tdy, sum_yaw, sum_pitch);
+    }
+    if (tdx || tdy) {
+        racit_camera_feed(tdx, tdy, 1, 100, 0);
+        sum_yaw += tdx * 0.003; sum_pitch += tdy * 0.003;
+    }
+}
+
 extern "C" int racit_camera_take(double* angles)
 {
     follow_ns.store(now_ns());
+    racit_test_mouse();
     angles[0] = angles[1] = 0.0;
     if (!captured.load()) return 0;
     angles[0] = (double)yaw_nrad.exchange(0) / 1e9;
