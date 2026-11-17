@@ -1,0 +1,162 @@
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1662,7 +1662,7 @@
+ #ifdef _WIN32
+         SwitchToThread();
+ #else
+-        sched_yield();
++        { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+         return;
+     }
+--- a/libs/sync/cellSync.c
++++ b/libs/sync/cellSync.c
+@@ -22,7 +22,8 @@
+ #define SYNC_YIELD() SwitchToThread()
+ #else
+ #include <sched.h>
+-#define SYNC_YIELD() sched_yield()
++void racacit_yield(void);
++#define SYNC_YIELD() racacit_yield()
+ #endif
+ 
+ /* =========================================================================
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -1904,7 +1904,7 @@
+ #ifdef _WIN32
+         SwitchToThread();
+ #else
+-        sched_yield();
++        { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+     }
+     { static int n = 0;
+--- a/runtime/platform/win32_compat.c
++++ b/runtime/platform/win32_compat.c
+@@ -2019,3 +2019,22 @@
+ /* Nothing to build: the header is a passthrough to <windows.h> there. */
+ typedef int ps3_win32_compat_not_needed_on_windows;
+ #endif
++/* The runtime's yield (Sleep(0), SwitchToThread, the SPU lock-line spin).
++ * On macOS sched_yield is swtch_pri(0), which also depresses the caller's
++ * priority for a scheduler quantum: with more runnable threads than cores
++ * (main, RSX walker, SPU lanes) a thread that yields while waiting for a
++ * spinlock can then sit out ~10 ms. thread_switch with no option hands the
++ * CPU over without the depression. RACACIT_YIELD=sched restores sched_yield. */
++#ifdef __APPLE__
++#include <mach/mach.h>
++#include <mach/thread_switch.h>
++#endif
++void racacit_yield(void)
++{
++#ifdef __APPLE__
++    static int mode = -1;
++    if (mode < 0) { const char* e = getenv("RACACIT_YIELD"); mode = (e && !strcmp(e, "sched")) ? 0 : 1; }
++    if (mode) { thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0); return; }
++#endif
++    sched_yield();
++}
+--- a/runtime/platform/win32_compat.h
++++ b/runtime/platform/win32_compat.h
+@@ -709,14 +709,19 @@
+ }
+ static inline void GetSystemTimePreciseAsFileTime(FILETIME* ft) { GetSystemTimeAsFileTime(ft); }
+ 
++/* racacit_yield (win32_compat.c): the yield Sleep(0), SwitchToThread and the
++ * runtime spin loops use. sched_yield on macOS is swtch_pri, which also
++ * depresses the caller for a scheduler quantum (~10 ms) when the machine is
++ * busy. */
++void racacit_yield(void);
+ static inline void Sleep(DWORD ms)
+ {
+-    if (ms == 0) { sched_yield(); return; }      /* Sleep(0) yields, as on Windows */
++    if (ms == 0) { racacit_yield(); return; }      /* Sleep(0) yields, as on Windows */
+     struct timespec d = { (time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L };
+     nanosleep(&d, NULL);
+ }
+ static inline DWORD SleepEx(DWORD ms, BOOL alertable) { (void)alertable; Sleep(ms); return 0; }
+-static inline BOOL  SwitchToThread(void)              { sched_yield(); return TRUE; }
++static inline BOOL  SwitchToThread(void)              { racacit_yield(); return TRUE; }
+ static inline UINT  timeBeginPeriod(UINT period)      { (void)period; return TIMERR_NOERROR; }
+ static inline UINT  timeEndPeriod(UINT period)        { (void)period; return TIMERR_NOERROR; }
+ 
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -583,7 +583,7 @@
+ #ifdef _WIN32
+         SwitchToThread();
+ #else
+-        sched_yield();
++        { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+         return;
+     }
+--- a/runtime/spu/spu_coherency.c
++++ b/runtime/spu/spu_coherency.c
+@@ -89,6 +89,7 @@
+ #else
+ #include <stdatomic.h>
+ #include <sched.h>
++void racacit_yield(void);   /* win32_compat.c: sched_yield without the macOS priority depression */
+ static atomic_int g_lockline;
+ #if defined(__aarch64__) || defined(__arm64__)
+ #define SPU_LL_PAUSE() __asm__ __volatile__("yield")
+@@ -112,7 +113,7 @@
+     do {
+         while (atomic_load_explicit(&g_lockline, memory_order_relaxed)) {
+             SPU_LL_PAUSE();
+-            if (++spins >= (unsigned)s_ll_spin) { spins = 0; sched_yield(); }
++            if (++spins >= (unsigned)s_ll_spin) { spins = 0; racacit_yield(); }
+         }
+     } while (atomic_exchange_explicit(&g_lockline, 1, memory_order_acquire));
+ }
+@@ -122,7 +123,7 @@
+     unsigned spins = 0;
+     while (*lock) {
+         SPU_LL_PAUSE();
+-        if (++spins >= 1024u) { spins = 0; sched_yield(); }
++        if (++spins >= 1024u) { spins = 0; racacit_yield(); }
+     }
+ }
+ #endif
+--- a/runtime/syscalls/sys_event.c
++++ b/runtime/syscalls/sys_event.c
+@@ -324,7 +324,7 @@
+ #ifdef _WIN32
+         SwitchToThread();
+ #else
+-        sched_yield();
++        { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+     /* WAITBT_EVERY=<n>: the same dump, but every nth wait per (tid,queue)
+      * instead of once. The one-shot above names where a thread FIRST parks,
+@@ -354,7 +354,7 @@
+ #ifdef _WIN32
+         SwitchToThread();
+ #else
+-        sched_yield();
++        { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+         return (int64_t)(int32_t)CELL_ESRCH;
+     }
+@@ -1180,7 +1180,7 @@
+ #ifdef _WIN32
+         SwitchToThread();
+ #else
+-        sched_yield();
++        { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+         return (int64_t)(int32_t)CELL_ESRCH;
+     }
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -1219,7 +1219,7 @@
+ #ifdef _WIN32
+     SwitchToThread();
+ #else
+-    sched_yield();
++    { extern void racacit_yield(void); racacit_yield(); }
+ #endif
+     return CELL_OK;
+ }
