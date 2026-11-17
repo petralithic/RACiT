@@ -1,0 +1,56 @@
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -3675,7 +3675,23 @@
+ #define PS3_SC_INFLIGHT_MAX 64
+ extern "C" uint32_t g_sc_inflight[PS3_SC_INFLIGHT_MAX] = { 0 };
+ 
++/* Title hook: every lv2 syscall's wall time, with its number and the guest lr
++ * (game/stubs.cpp sets it for RACACIT_MAIN_STATS; NULL otherwise, one test). */
++extern "C" { void (*g_ppu_sc_time_hook)(ppu_context*, uint32_t num, unsigned long long us) = 0; }
++extern "C" void lv2_syscall_body(ppu_context* ctx);
+ extern "C" void lv2_syscall(ppu_context* ctx)
++{
++    if (__builtin_expect(g_ppu_sc_time_hook != 0, 0)) {
++        extern unsigned long long ps3_qpc_us(void);
++        const uint32_t num = (uint32_t)ctx->gpr[11];
++        const unsigned long long t0 = ps3_qpc_us();
++        lv2_syscall_body(ctx);
++        g_ppu_sc_time_hook(ctx, num, ps3_qpc_us() - t0);
++        return;
++    }
++    lv2_syscall_body(ctx);
++}
++extern "C" void lv2_syscall_body(ppu_context* ctx)
+ {
+     /* One-shot: PPU_GUARD_EA=<hex> arms the page guard on that address without
+      * waiting for a store watch to fire. Armed here because lv2_syscall runs
+--- a/runtime/ppu/ppu_hle.cpp
++++ b/runtime/ppu/ppu_hle.cpp
+@@ -123,8 +123,27 @@
+ 
+ extern "C" void ppu_prof_stamp(void* ctx, unsigned lr);
+ extern "C" uint32_t ppu_prof_resolve_host(void* ra);
++/* The syscall timing hook (ppu_loader.cpp) also gets every HLE import call:
++ * num = 0x80000000 | the NID's low 31 bits. NULL unless a title sets it. */
++extern "C" void (*g_ppu_sc_time_hook)(ppu_context*, uint32_t num, unsigned long long us);
++extern "C" void ps3_hle_call_body(uint32_t nid, ppu_context* ctx);
+ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+ {
++    if (__builtin_expect(g_ppu_sc_time_hook != 0, 0)) {
++        extern unsigned long long ps3_qpc_us(void);
++        const uint32_t lr = (uint32_t)ctx->lr;
++        const unsigned long long t0 = ps3_qpc_us();
++        ps3_hle_call_body(nid, ctx);
++        const unsigned long long d = ps3_qpc_us() - t0;
++        const uint64_t keep = ctx->lr; ctx->lr = lr;    /* key on the call site, not where the import returned */
++        g_ppu_sc_time_hook(ctx, 0x80000000u | (nid & 0x7FFFFFFFu), d);
++        ctx->lr = keep;
++        return;
++    }
++    ps3_hle_call_body(nid, ctx);
++}
++extern "C" void ps3_hle_call_body(uint32_t nid, ppu_context* ctx)
++{
+     /* HLE_BT_EVERY=<n>: dump the calling thread's guest stack every nth HLE
+      * call it makes. WAITBT_EVERY only samples threads that are blocking on an
+      * event queue, which misses a thread that stops looping while it is BUSY --

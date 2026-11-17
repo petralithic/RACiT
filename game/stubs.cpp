@@ -1226,6 +1226,64 @@ static struct { long lr; long long us; long n; } s_ws[32];
 static long long s_ws_win;
 static std::mutex s_ws_lock;
 
+/* RACACIT_MAIN_STATS=1: where the main game thread's frame goes, printed every
+ * 5 s as ms per frame (frames = Clock_Tick calls on that thread): wall time,
+ * thread CPU time, SPU waits (every racacit_wait_begin/end span, spins
+ * included; "sleeping" = the syscalls inside them), the frame limiter's
+ * sleep (racacit_frame_limit), every other lv2 syscall by number and guest lr
+ * (usleep polls, semaphores, ...), and the rest (game code and any spin
+ * without a hook). Main thread only, so nothing here takes a lock. */
+#ifdef __APPLE__
+#include <time.h>
+#endif
+static int rac_main_stats(void) { static int v = -1; if (v < 0) v = getenv("RACACIT_MAIN_STATS") ? 1 : 0; return v; }
+static thread_local int t_ms_depth;    /* only the main thread ever raises it */
+static unsigned long long s_ms_w0, s_ms_spu, s_ms_spu_sc, s_ms_lim, s_ms_frames, s_ms_t0, s_ms_cpu0, s_ms_sc;
+static struct { uint32_t num, lr; unsigned long long us; unsigned n; } s_ms_sct[48];
+static unsigned long long rac_thread_cpu_us(void)
+{
+#ifdef __APPLE__
+    return clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) / 1000ull;
+#else
+    return 0;
+#endif
+}
+extern "C" void (*g_ppu_sc_time_hook)(ppu_context*, uint32_t, unsigned long long);
+static void rac_ms_sc(ppu_context* ctx, uint32_t num, unsigned long long us)
+{
+    if (ctx != g_racacit_main_ctx) return;
+    if (t_ms_depth > 0) { s_ms_spu_sc += us; return; }
+    s_ms_sc += us;
+    const uint32_t lr = (uint32_t)ctx->lr;
+    int k = 0;
+    for (; k < 48; k++) if ((s_ms_sct[k].num == num && s_ms_sct[k].lr == lr) || !s_ms_sct[k].n) break;
+    if (k < 48) { s_ms_sct[k].num = num; s_ms_sct[k].lr = lr; s_ms_sct[k].us += us; s_ms_sct[k].n++; }
+}
+__attribute__((constructor)) static void rac_ms_install(void) { if (rac_main_stats()) g_ppu_sc_time_hook = rac_ms_sc; }
+static void rac_ms_frame(ppu_context* ctx)
+{
+    if (!rac_main_stats() || ctx != g_racacit_main_ctx) return;
+    const unsigned long long now = rac_us(), cpu = rac_thread_cpu_us();
+    s_ms_frames++;
+    if (!s_ms_t0) { s_ms_t0 = now; s_ms_cpu0 = cpu; s_ms_frames = 0; return; }
+    if (now - s_ms_t0 < 5000000ull) return;
+    const double f = (double)(s_ms_frames ? s_ms_frames : 1), wall = (double)(now - s_ms_t0);
+    const double spu = s_ms_spu / f / 1e3, lim = s_ms_lim / f / 1e3, sc = s_ms_sc / f / 1e3, w = wall / f / 1e3;
+    fprintf(stderr, "[main-stats] %.1f fps; ms/frame: wall %.2f cpu %.2f | spu-waits %.2f (sleeping %.2f) limiter %.2f syscalls %.2f rest %.2f | syscalls:",
+            s_ms_frames * 1e6 / wall, w, (double)(cpu - s_ms_cpu0) / f / 1e3, spu, s_ms_spu_sc / f / 1e3, lim, sc, w - spu - lim - sc);
+    for (int r = 0; r < 8; r++) {
+        int b = -1;
+        for (int i = 0; i < 48 && s_ms_sct[i].n; i++) if (s_ms_sct[i].us && (b < 0 || s_ms_sct[i].us > s_ms_sct[b].us)) b = i;
+        if (b < 0) break;
+        fprintf(stderr, " %X@%08X %.2f (%.1fx)", s_ms_sct[b].num, s_ms_sct[b].lr, s_ms_sct[b].us / f / 1e3, s_ms_sct[b].n / f);
+        s_ms_sct[b].us = 0;
+    }
+    fprintf(stderr, "%c", 10);
+    memset(s_ms_sct, 0, sizeof s_ms_sct);
+    s_ms_spu = s_ms_spu_sc = s_ms_lim = s_ms_sc = s_ms_frames = 0;
+    s_ms_t0 = now; s_ms_cpu0 = cpu;
+}
+
 /* RACACIT_LUA_FILE=<path> (test hook): when the file exists, its text runs
  * as a Lua chunk on the level scripts' own Lua state, then the file is
  * deleted -- e.g. "on_elapsed(1, function() go(9) end)" in a level whose
@@ -1295,6 +1353,7 @@ extern "C" void racacit_wait_begin(ppu_context* ctx)
     /* The main game thread's context, for the stall watch (main.cpp): it is
      * the one that waits on MobyPreRender every frame. */
     if ((uint32_t)ctx->lr == 0x006459D0u) { g_racacit_main_ctx = ctx; racacit_lua_file(ctx, s_lua_main); }
+    if (rac_main_stats() && ctx == g_racacit_main_ctx && t_ms_depth++ == 0) s_ms_w0 = rac_us();
     if (!rac_wait_stats()) return;
     if (t_wait_depth++ == 0) {
         t_wait_t0 = rac_us(); t_wait_lr = (uint32_t)ctx->lr;
@@ -1318,6 +1377,7 @@ extern "C" void racacit_wait_begin(ppu_context* ctx)
 
 extern "C" void racacit_wait_end(void)
 {
+    if (rac_main_stats() && t_ms_depth > 0 && --t_ms_depth == 0) s_ms_spu += rac_us() - s_ms_w0;
     if (!rac_wait_stats() || t_wait_depth <= 0 || --t_wait_depth != 0) return;
     const unsigned long long now = rac_us(), d = now - t_wait_t0;
     g_racacit_main_wait_lr = 0;
@@ -1960,6 +2020,7 @@ extern "C" void racacit_clock_tick(ppu_context* ctx)
     static int log = -1;
     if (log < 0) log = (cap > 60 || getenv("RACACIT_CLOCK_LOG")) ? 1 : 0;
     const uint32_t clk = (uint32_t)ctx->gpr[3];
+    rac_ms_frame(ctx);
     racacit_frame60_tick(clk);
     if (cap > 60) {
         const float want = 1.0f / (2.0f * (float)cap);
@@ -2012,6 +2073,7 @@ extern "C" int racacit_frame_limit(ppu_context* ctx)
     uint64_t now = ppu_timebase_now();
     uint64_t dl = racacit_rd64(disp + 0x2D8u);
     if (now < dl) {
+        const unsigned long long ms0 = rac_main_stats() ? rac_us() : 0;
         racacit_wr64(disp + 0x2E0u, dl - now);
         while (now < dl) {
             const uint64_t left_us = (dl - now) * 1000000ull / tb_hz;
@@ -2019,6 +2081,7 @@ extern "C" int racacit_frame_limit(ppu_context* ctx)
                 std::this_thread::sleep_for(std::chrono::microseconds(left_us - 100));
             now = ppu_timebase_now();
         }
+        if (ms0 && ctx == g_racacit_main_ctx) s_ms_lim += rac_us() - ms0;
         dl += period;
     } else {
         racacit_wr64(disp + 0x2E0u, 0);
