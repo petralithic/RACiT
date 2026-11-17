@@ -34,10 +34,11 @@
      { static int n = 0;
 --- a/runtime/platform/win32_compat.c
 +++ b/runtime/platform/win32_compat.c
-@@ -2019,3 +2019,22 @@
+@@ -2018,4 +2018,29 @@
+ #else  /* _WIN32 */
  /* Nothing to build: the header is a passthrough to <windows.h> there. */
  typedef int ps3_win32_compat_not_needed_on_windows;
- #endif
++#endif
 +/* The runtime's yield (Sleep(0), SwitchToThread, the SPU lock-line spin).
 + * On macOS sched_yield is swtch_pri(0), which also depresses the caller's
 + * priority for a scheduler quantum: with more runnable threads than cores
@@ -47,13 +48,19 @@
 +#ifdef __APPLE__
 +#include <mach/mach.h>
 +#include <mach/thread_switch.h>
-+#endif
+ #endif
 +void racacit_yield(void)
 +{
 +#ifdef __APPLE__
 +    static int mode = -1;
-+    if (mode < 0) { const char* e = getenv("RACACIT_YIELD"); mode = (e && !strcmp(e, "sched")) ? 0 : 1; }
-+    if (mode) { thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0); return; }
++    /* RACACIT_YIELD=depress<ms>: step aside with a depression of that many ms
++     * (a middle ground for spinners competing with the main thread). */
++    static unsigned dep_ms;
++    if (mode < 0) { const char* e = getenv("RACACIT_YIELD");
++        mode = (e && !strcmp(e, "sched")) ? 0 : (e && !strncmp(e, "depress", 7)) ? 2 : 1;
++        if (mode == 2) { dep_ms = (unsigned)atoi(e + 7); if (!dep_ms) dep_ms = 1; } }
++    if (mode == 1) { thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0); return; }
++    if (mode == 2) { thread_switch(MACH_PORT_NULL, SWITCH_OPTION_DEPRESS, dep_ms); return; }
 +#endif
 +    sched_yield();
 +}
