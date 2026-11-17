@@ -37,7 +37,11 @@ esac
 
 [ -f "$ELF" ] || { echo "No ELF at $ELF — put your decrypted EBOOT.ELF in input/"; exit 1; }
 # Profiles identify both the disc region and the executable update.
-$PY "$ROOT/scripts/patch_lift.py" --check-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}"
+PROFILE="$($PY "$ROOT/scripts/patch_lift.py" --check-profile "$ELF" "${RACACIT_GAME_PROFILE:-auto}")"
+echo "$PROFILE"
+# patch_lift.py applies address-specific hooks only for this verified profile.
+PROFILE="${PROFILE#Game profile: }"
+export RACACIT_GAME_PROFILE="${PROFILE%% *}"
 LIBSRE="${LIBSRE:-$ROOT/input/libsre.prx}"
 [ -f "$LIBSRE" ] || { echo "No libsre.prx at $LIBSRE — decrypt dev_flash/sys/external/libsre.sprx with RPCS3"; exit 1; }
 mkdir -p "$OUT" "$RECOMP" "$SPU"
