@@ -6486,7 +6486,7 @@ index 071b9ecd..a241354c 100644
  static int  s_boot_checked = 0;
  static u32  s_game_type = CELL_GAME_GAMETYPE_DISC;
 diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
-index 79ea8cab..e237e752 100644
+index 79ea8cab..97c718cb 100644
 --- a/libs/system/cellSaveData.c
 +++ b/libs/system/cellSaveData.c
 @@ -29,6 +29,17 @@
@@ -6895,6 +6895,15 @@ index 79ea8cab..e237e752 100644
          const char* mode;
          if (set->fileOperation == CELL_SAVEDATA_FILEOP_WRITE && set->fileOffset == 0) {
              mode = "wb";
+@@ -800,7 +1117,7 @@ static void read_param_sfo(const char* save_path, CellSaveDataSystemFileParam* p
+ }
+ 
+ /* Core save/load implementation shared by List/Fixed/Auto variants */
+-static s32 savedata_execute(const char* dirName, int is_save,
++static s32 savedata_execute_impl(const char* dirName, int is_save,
+                              CellSaveDataSetBuf* setBuf,
+                              CellSaveDataStatCallback funcStat,
+                              CellSaveDataFileCallback funcFile,
 @@ -920,6 +1237,9 @@ static s32 savedata_execute(const char* dirName, int is_save,
                     fileSet.fileOperation, fileSet.fileType,
                     fileSet.fileName ? fileSet.fileName : "", fileSet.fileOffset,
@@ -6905,10 +6914,27 @@ index 79ea8cab..e237e752 100644
              if (exc < 0) { free(fileList); return exc; }
              exc_size = (u32)exc;
          }
-@@ -942,6 +1262,24 @@ static s32 savedata_execute(const char* dirName, int is_save,
+@@ -942,6 +1262,41 @@ static s32 savedata_execute(const char* dirName, int is_save,
   * API implementations
   * -----------------------------------------------------------------------*/
  
++/* racacit: the menu's Restart (game/restart.cpp) waits for every save or load
++ * in flight, and none starts once it is requested. The gate covers every
++ * return of the complete transaction. */
++extern int racit_restart_save_begin(void);
++extern void racit_restart_save_end(void);
++static s32 savedata_execute(const char* dirName, int is_save,
++                            CellSaveDataSetBuf* setBuf,
++                            CellSaveDataStatCallback funcStat,
++                            CellSaveDataFileCallback funcFile,
++                            void* userdata)
++{
++    if (!racit_restart_save_begin()) return CELL_SAVEDATA_ERROR_BUSY;
++    const s32 result = savedata_execute_impl(dirName, is_save, setBuf, funcStat, funcFile, userdata);
++    racit_restart_save_end();
++    return result;
++}
++
 +/* The list save/load utilities are a system UI on hardware: they take a
 + * second or more. Done instantly, A Crack in Time's New Game never moved
 + * on after its save -- its front end polls once a frame and the save thread
@@ -6930,7 +6956,7 @@ index 79ea8cab..e237e752 100644
  s32 cellSaveDataListSave2(u32 version, CellSaveDataSetList* setList,
                             CellSaveDataSetBuf* setBuf,
                             CellSaveDataListCallback funcList,
-@@ -988,6 +1326,7 @@ s32 cellSaveDataListSave2(u32 version, CellSaveDataSetList* setList,
+@@ -988,6 +1343,7 @@ s32 cellSaveDataListSave2(u32 version, CellSaveDataSetList* setList,
                                            (uint32_t)(uintptr_t)userdata, "funcList", selectedDir);
      (void)listSet;
  
@@ -6938,7 +6964,7 @@ index 79ea8cab..e237e752 100644
      if (cbResult.result < 0) {
          free(dirList);
          return CELL_SAVEDATA_ERROR_CBRESULT;
-@@ -1001,6 +1340,7 @@ s32 cellSaveDataListSave2(u32 version, CellSaveDataSetList* setList,
+@@ -1001,6 +1357,7 @@ s32 cellSaveDataListSave2(u32 version, CellSaveDataSetList* setList,
  
      s32 result = savedata_execute(selectedDir, 1, setBuf, funcStat, funcFile, userdata);
      free(dirList);
@@ -6946,7 +6972,7 @@ index 79ea8cab..e237e752 100644
      return result;
  }
  
-@@ -1048,6 +1388,7 @@ s32 cellSaveDataListLoad2(u32 version, CellSaveDataSetList* setList,
+@@ -1048,6 +1405,7 @@ s32 cellSaveDataListLoad2(u32 version, CellSaveDataSetList* setList,
                                            (uint32_t)(uintptr_t)userdata, "funcList", selectedDir);
      (void)listSet;
  
@@ -6954,7 +6980,7 @@ index 79ea8cab..e237e752 100644
      if (cbResult.result < 0) {
          free(dirList);
          return CELL_SAVEDATA_ERROR_CBRESULT;
-@@ -1128,7 +1469,7 @@ static s32 savedata_fixed(int is_save, CellSaveDataSetList* setList,
+@@ -1128,7 +1486,7 @@ static s32 savedata_fixed(int is_save, CellSaveDataSetList* setList,
          }
          printf("[cellSaveData] savedata_fixed: cbresult=%d listed=%u/%u prefix='%s' root='%s'\n",
                 result, listed, count,
@@ -6963,7 +6989,7 @@ index 79ea8cab..e237e752 100644
          SAVEDATA_REJECT(CELL_SAVEDATA_ERROR_CBRESULT, w);
      }
      if (!funcStat)
-@@ -1187,6 +1528,25 @@ s32 cellSaveDataListAutoLoad(u32 version, u32 errDialog,
+@@ -1187,6 +1545,25 @@ s32 cellSaveDataListAutoLoad(u32 version, u32 errDialog,
      return savedata_fixed(0, setList, setBuf, funcFixed, funcStat, funcFile, userdata);
  }
  
@@ -6989,7 +7015,7 @@ index 79ea8cab..e237e752 100644
  s32 cellSaveDataAutoSave2(u32 version, const char* dirName,
                             u32 errDialog,
                             CellSaveDataSetBuf* setBuf,
-@@ -1261,8 +1621,21 @@ s32 cellSaveDataDelete2(u32 container)
+@@ -1261,8 +1638,21 @@ s32 cellSaveDataDelete2(u32 container)
  {
      printf("[cellSaveData] Delete2(container=%u)\n", container);
  
@@ -7013,7 +7039,7 @@ index 79ea8cab..e237e752 100644
      return CELL_OK;
  }
  
-@@ -1495,6 +1868,19 @@ void ps3_savedata_list_auto_load(ppu_context* ctx)
+@@ -1495,6 +1885,19 @@ void ps3_savedata_list_auto_load(ppu_context* ctx)
          (u32)ctx->gpr[10], (void*)(uintptr_t)savedata_arg9(ctx));
  }
  
@@ -17042,10 +17068,10 @@ index cbec250a..4359a3b5 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..004151a6
+index 00000000..547bc846
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2198 @@
+@@ -0,0 +1,2205 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
@@ -17295,6 +17321,12 @@ index 00000000..004151a6
 +    settings_save_file();
 +    SDL_AtomicUnlock(&save_lock);
 +}
++/* Write pending settings now (the menu's Restart, game/restart.cpp). */
++void rsx_host_ui_flush_settings(void)
++{
++    if (s_dirty_ms) { settings_save(); s_dirty_ms = 0; }
++}
++
 +static void settings_save_file(void)
 +{
 +    const char* path = getenv("RACACIT_SETTINGS_FILE");
@@ -19219,6 +19251,7 @@ index 00000000..004151a6
 +    *out = s_opt;
 +    if (!out->ds_plus) out->ds_speaker = out->ds_haptics = out->ds_triggers = out->ds_swap = out->ds_lightbar = out->ds_motion = 0;
 +}
++void rsx_host_ui_flush_settings(void) {}
 +void rsx_host_ui_attach(struct SDL_Window* w, float a, float r) { (void)w; (void)a; (void)r; }
 +void rsx_host_ui_initial_window(int* w, int* h, unsigned* f) { *w = 1280; *h = 720; *f = 0; }
 +int  rsx_host_ui_event(const union SDL_Event* e) { (void)e; return 0; }
@@ -19246,10 +19279,10 @@ index 00000000..004151a6
 +#endif
 diff --git a/libs/video/rsx_host_ui.h b/libs/video/rsx_host_ui.h
 new file mode 100644
-index 00000000..ef6a41c5
+index 00000000..69080968
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.h
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,237 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display (RaCACiT)
 + *
@@ -19363,6 +19396,8 @@ index 00000000..ef6a41c5
 + * `res_scale_active`: the internal resolution this run uses. */
 +struct SDL_Window;
 +void rsx_host_ui_attach(struct SDL_Window* win, float max_aniso, float res_scale_active);
++/* Write settings changed in the last second now, before a restart exits. */
++void rsx_host_ui_flush_settings(void);
 +
 +/* Initial window size and flags the backend should create the window with. */
 +void rsx_host_ui_initial_window(int* w, int* h, unsigned* sdl_flags);
