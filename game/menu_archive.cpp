@@ -42,6 +42,8 @@ bool racit_menu_archive_init()
     return true;
 }
 
+extern "C" int racit_menu_archive_active(void) { return !s_menu_archive.empty(); }
+
 extern "C" void racit_menu_archive_path(char* path, size_t capacity, int read_only)
 {
     static const char suffix[] = "/packed/game/global_cached.psarc";

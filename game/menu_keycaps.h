@@ -1,6 +1,8 @@
 /* Include after ppu_recomp.h. Publish to the current screen's movie before
  * its normal frame update, outside Scaleform's ActionScript callbacks.
- * Keep the current controller/keyboard decision shared with the font prompts.
+ * Only while a prepared menu archive is in use (RACACIT_MENU_ARCHIVE): the
+ * original movies have no ActionScript that reads these fields.
+ * The keyboard/controller decision is cellPad.c's racit_keyboard_prompts_active.
  */
 #ifndef RACIT_MENU_KEYCAPS_H
 #define RACIT_MENU_KEYCAPS_H
@@ -14,7 +16,8 @@
 #endif
 #include "ppu_stack_read.h"
 
-extern "C" int racit_keyboard_prompts_active(void);
+extern "C" int racit_keyboard_prompts_active(void);   /* cellPad.c */
+extern "C" int racit_menu_archive_active(void);       /* game/menu_archive.cpp */
 extern "C" void ps3_indirect_call(ppu_context*);
 extern "C" PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
 
@@ -95,6 +98,7 @@ static bool racit_menu_set_string(ppu_context* ctx, uint32_t movie,
 
 static void racit_publish_menu_keyboard(ppu_context* ctx, uint32_t movie_offset = 4)
 {
+    if (!racit_menu_archive_active()) return;
     const uint32_t owner = (uint32_t)ctx->gpr[3];
     uint32_t movie = 0;
     if (!owner || owner > UINT32_MAX - movie_offset ||
@@ -108,8 +112,8 @@ static void racit_publish_menu_keyboard(ppu_context* ctx, uint32_t movie_offset 
         if (report) fprintf(stderr, "[menu-keycaps] frame movie=%08X table=%08X descriptor=%08X procedure=%08X: receiver read failed\n", movie, table, descriptor, procedure);
         return;
     }
-    const char* enabled = getenv("RACACIT_PROMPT_SWAP");
-    const bool keyboard = !(enabled && *enabled == '0') && racit_keyboard_prompts_active();
+    const bool keyboard = racit_keyboard_prompts_active() != 0;
+    /* Fallbacks: cellPad.c's default bindings (k_kb), first key shown. */
     struct Binding { const char* field; const char* binding; const char* fallback; };
     static const Binding bindings[] = {
         {"cross", "CROSS", "Space"}, {"circle", "CIRCLE", "E"},
@@ -117,7 +121,7 @@ static void racit_publish_menu_keyboard(ppu_context* ctx, uint32_t movie_offset 
         {"select", "SELECT", "Tab"}, {"start", "START", "Escape"},
         {"l1", "L1", "Left Ctrl"}, {"l2", "L2", "Mouse3"},
         {"r1", "R1", "Mouse1"}, {"r2", "R2", "Left Shift"},
-        {"l3", "L3", "V"}, {"r3", "R3", "B"},
+        {"l3", "L3", "V"}, {"r3", "R3", "Mouse2"},
         {"lstick", "LS_UP", "WASD"}, {"rstick", "RS_UP", "IJKL"},
     };
     bool accepted = true;

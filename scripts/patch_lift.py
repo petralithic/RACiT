@@ -583,8 +583,10 @@ def patch_file(path):
                         'extern "C" unsigned long long SDL_GetPerformanceFrequency(void);\n') + src[i:]
         changed = True
 
-    # Desktop menu movies use two separate frame paths in BCUS98124 disc 1.00.
-    # Publish outside ActionScript execution, preserving the guest context.
+    # Keyboard menu prompts (game/menu_keycaps.h): the menu movies have two
+    # separate frame paths in BCUS98124 disc 1.00. Publish the key labels before
+    # each frame, outside ActionScript execution, preserving the guest context.
+    # Does nothing unless RACACIT_MENU_ARCHIVE names a prepared archive.
     for entry, offsets in (('func_004C6F6C', (4,)),
                            ('func_004ADB3C', (8, 4))):
         sp = func_span(src, entry)
