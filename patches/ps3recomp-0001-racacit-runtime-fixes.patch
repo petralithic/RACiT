@@ -350,7 +350,7 @@ index 00000000..68a27955
 +
 +#endif /* AUDIO_STRETCH_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index b51fb7c4..dda413f7 100644
+index b51fb7c4..0268661c 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -13,12 +13,17 @@
@@ -399,7 +399,7 @@ index b51fb7c4..dda413f7 100644
  
  /* Mixing thread */
  static unsigned long long g_audio_dropped;   /* frames the device had no room for */
-@@ -154,8 +166,45 @@ static int           s_mix_thread_live = 0;
+@@ -154,8 +166,70 @@ static int           s_mix_thread_live = 0;
  static mutex_t       s_audio_mutex;
  
  /* Output mix buffer (stereo, one block worth) */
@@ -428,7 +428,33 @@ index b51fb7c4..dda413f7 100644
 + * A port the game does not fill by SPU PUT (no s_port_done_seen) reads on as it
 + * always did, with pub_index = read_index. */
 +#define AUDIO_DEV_BLOCKS 4u         /* in the device's queue: 21 ms */
-+static u32 s_q_target = 6;          /* blocks wanted in the stretcher beyond its frame: 6 (32 ms), +2 per dropout with sound, up to 24 (128 ms) */
++/* macOS: the whole process stops for 20-60 ms at a hitch (a shader compile, a
++ * load), the mixing thread with it. 21 ms in the device then ran out: a hole,
++ * and the blocks that piled up meanwhile were played 3% fast to catch up --
++ * compressed 90% of the time at 120 fps. Here the device may hold up to
++ * AUDIO_DEV_MAX_BLOCKS and is kept at AUDIO_DEV_MIN0 or more: what the
++ * stretcher has beyond its next hop goes on to it, and the level that sets the
++ * ratio counts both. A stall plays on from the device. */
++#ifdef __APPLE__
++#define AUDIO_DEV_MAX_BLOCKS 20u    /* 107 ms */
++#define AUDIO_DEV_MIN0 8u           /* always in the device: 43 ms, even when the game is short */
++#define AUDIO_Q_TARGET0 6u          /* in hand beyond that: 32 ms */
++#else
++#define AUDIO_DEV_MAX_BLOCKS AUDIO_DEV_BLOCKS
++#define AUDIO_DEV_MIN0 AUDIO_DEV_BLOCKS
++#define AUDIO_Q_TARGET0 6u
++#endif
++static u32 s_q_target = AUDIO_Q_TARGET0;
++static u32 s_q_base = AUDIO_Q_TARGET0;     /* where a quiet minute brings s_q_target back to */
++static u32 s_dev_min = AUDIO_DEV_MIN0;     /* blocks the device is kept topped up to */
++/* RACACIT_AUDIO_LEGACY=1: the output as before the deeper macOS device queue
++ * (for A/B tests). */
++static int s_audio_legacy = -1;
++static int audio_legacy(void)
++{
++    if (s_audio_legacy < 0) { const char* e = getenv("RACACIT_AUDIO_LEGACY"); s_audio_legacy = e && *e == '1'; }
++    return s_audio_legacy;
++}          /* blocks wanted in the stretcher beyond its frame: 6 (32 ms), +2 per dropout with sound, up to 24 (128 ms) */
 +static atomic_uint s_finished[CELL_AUDIO_PORT_MAX];   /* blocks the game has finished, ever */
 +static unsigned s_pub_steps;        /* for the 30 s report */
 +static int s_pub_mode;              /* the above is on (a device is open; not RACACIT_AUDIO_NOWAIT) */
@@ -440,12 +466,11 @@ index b51fb7c4..dda413f7 100644
 +static unsigned s_late_skips, s_late_fades;   /* for the 30 s report */
 +/* AUDIO_TRACE=1 (measurement): one line a second of what the output did. */
 +static double s_tr_rmax = 1.0, s_tr_rmin = 1.0, s_tr_hmin = 1e9, s_tr_qmin = 1e9, s_tr_gap = 0.0;
-+static unsigned s_tr_skips;
 +
  /* ---------------------------------------------------------------------------
   * Host audio output backend
   * -----------------------------------------------------------------------*/
-@@ -164,6 +213,248 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+@@ -164,6 +238,248 @@ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
  
  static SDL_AudioDeviceID s_sdl_audio_dev = 0;
  
@@ -694,7 +719,7 @@ index b51fb7c4..dda413f7 100644
  static int audio_backend_init(void)
  {
      if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
-@@ -188,6 +479,8 @@ static int audio_backend_init(void)
+@@ -188,6 +504,8 @@ static int audio_backend_init(void)
      }
  
      SDL_PauseAudioDevice(s_sdl_audio_dev, 0); /* Start playback */
@@ -703,7 +728,7 @@ index b51fb7c4..dda413f7 100644
      return 0;
  }
  
-@@ -201,18 +494,19 @@ static void audio_backend_shutdown(void)
+@@ -201,18 +519,39 @@ static void audio_backend_shutdown(void)
  
  static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
  {
@@ -715,17 +740,43 @@ index b51fb7c4..dda413f7 100644
  }
  
 -/* SDL queues without bound: keep about four blocks ahead of the device. */
-+/* SDL queues without bound: keep AUDIO_DEV_BLOCKS ahead of the device. */
++static u64 audio_now_us(void);
++/* AUDIO_VDEV=1 (measurement): a device drained by the wall clock at exactly
++ * 48 kHz in place of SDL's queue, whose dummy and disk drivers drift 2-3% slow.
++ * Underruns are counted for AUDIO_TRACE. */
++static int s_vdev = -1, s_vdev_live;
++static double s_vq, s_vhole_ms; static unsigned s_vholes; static u64 s_vt;
++static int audio_vdev(void)
++{
++    if (s_vdev < 0) s_vdev = getenv("AUDIO_VDEV") ? 1 : 0;
++    if (s_vdev) {
++        const u64 t = audio_now_us();
++        if (s_vt) {
++            s_vq -= (double)(t - s_vt) * (CELL_AUDIO_SAMPLE_RATE / 1e6);
++            if (s_vq < 0.0) { if (s_vdev_live) { s_vhole_ms += -s_vq * 1000.0 / CELL_AUDIO_SAMPLE_RATE; if (s_vdev_live == 1) s_vholes++; s_vdev_live = 2; } s_vq = 0.0; }
++        }
++        s_vt = t;
++    }
++    return s_vdev;
++}
++/* SDL queues without bound: keep s_dev_min blocks ahead of the device. */
  static int audio_backend_room(void)
  {
      if (!s_sdl_audio_dev) return -1;
++    if (audio_vdev()) return s_vq < CELL_AUDIO_BLOCK_SAMPLES * s_dev_min ? CELL_AUDIO_BLOCK_SAMPLES : 0;
      return SDL_GetQueuedAudioSize(s_sdl_audio_dev) / (2 * sizeof(float)) <
 -           CELL_AUDIO_BLOCK_SAMPLES * 4 ? CELL_AUDIO_BLOCK_SAMPLES : 0;
-+           CELL_AUDIO_BLOCK_SAMPLES * AUDIO_DEV_BLOCKS ? CELL_AUDIO_BLOCK_SAMPLES : 0;
++           CELL_AUDIO_BLOCK_SAMPLES * s_dev_min ? CELL_AUDIO_BLOCK_SAMPLES : 0;
  }
  
  static void audio_backend_wait(void) { SDL_Delay(1); }
-@@ -225,6 +519,15 @@ static u32 audio_backend_queued_samples(void)
+@@ -220,11 +559,21 @@ static void audio_backend_wait(void) { SDL_Delay(1); }
+ static u32 audio_backend_queued_samples(void)
+ {
+     if (s_sdl_audio_dev) {
++        if (audio_vdev()) return (u32)s_vq;
+         return SDL_GetQueuedAudioSize(s_sdl_audio_dev) / (2 * sizeof(float));
+     }
      return 0;
  }
  
@@ -741,7 +792,7 @@ index b51fb7c4..dda413f7 100644
  #endif /* AUDIO_BACKEND_SDL2 */
  
  #if AUDIO_BACKEND_WASAPI
-@@ -373,7 +676,7 @@ static int audio_backend_room(void)
+@@ -373,7 +722,7 @@ static int audio_backend_room(void)
      if (FAILED(hr)) {
          /* Device gone (AUDCLNT_E_DEVICE_INVALIDATED on a default-device
           * change, sleep, ...): pace on the clock rather than spin. */
@@ -750,7 +801,7 @@ index b51fb7c4..dda413f7 100644
              fprintf(stderr, "[cellAudio] GetCurrentPadding failed 0x%08lX -- clock pacing%c", (unsigned long)hr, 10);
          return -1;
      }
-@@ -408,10 +711,37 @@ static inline float ld_be_f32(const float* p)
+@@ -408,10 +757,37 @@ static inline float ld_be_f32(const float* p)
      return f;
  }
  
@@ -788,7 +839,7 @@ index b51fb7c4..dda413f7 100644
  
      mutex_lock(&s_audio_mutex);
  
-@@ -445,15 +775,21 @@ static void audio_mix_one_block(void)
+@@ -445,15 +821,21 @@ static void audio_mix_one_block(void)
  
          /* Read one block at the current read_index */
          u32 block_idx = (u32)(port->read_index % nblock);
@@ -813,7 +864,7 @@ index b51fb7c4..dda413f7 100644
                  char map[36]; u32 b;
                  for (b = 0; b < nblock && b < 32; b++) {
                      const float* bp = port->buffer + b * CELL_AUDIO_BLOCK_SAMPLES * nch;
-@@ -463,8 +799,8 @@ static void audio_mix_one_block(void)
+@@ -463,8 +845,8 @@ static void audio_mix_one_block(void)
                      map[b] = nz ? '#' : '.';
                  }
                  map[b] = 0;
@@ -824,7 +875,7 @@ index b51fb7c4..dda413f7 100644
              } } }
  
          for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES; s++) {
-@@ -493,17 +829,37 @@ static void audio_mix_one_block(void)
+@@ -493,17 +875,37 @@ static void audio_mix_one_block(void)
              s_mix_buffer[s * 2 + 1] += right;
          }
  
@@ -864,7 +915,7 @@ index b51fb7c4..dda413f7 100644
      }
  
      mutex_unlock(&s_audio_mutex);
-@@ -513,6 +869,145 @@ static void audio_mix_one_block(void)
+@@ -513,6 +915,145 @@ static void audio_mix_one_block(void)
          if (s_mix_buffer[i] > 1.0f) s_mix_buffer[i] = 1.0f;
          if (s_mix_buffer[i] < -1.0f) s_mix_buffer[i] = -1.0f;
      }
@@ -1002,7 +1053,7 @@ index b51fb7c4..dda413f7 100644
 +        fprintf(stderr, "[cellAudio] in the last 30 s: stretched %u%% of the time, %u dropouts, %u jumps, game finished %.1f blocks/s, read index %.1f/s (in hand %u blocks)%c",
 +                n ? (unsigned)(st * 100u / n) : 0u, s_late_fades, s_late_skips, (finished - f0) / sec, s_pub_steps / sec, s_q_target, 10);
 +    quiet = s_late_fades ? 0 : quiet + 1;
-+    if (quiet >= 2 && s_q_target > 6) { s_q_target -= 2; quiet = 0; }
++    if (quiet >= 2 && s_q_target > s_q_base) { s_q_target -= 2; quiet = 0; }
 +    s_late_skips = s_late_fades = 0; s_pub_steps = 0;
 +    f0 = finished; st0 = s_st.stretched_steps; n0 = s_st.steps;
 +    t0 = t;
@@ -1010,7 +1061,7 @@ index b51fb7c4..dda413f7 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -521,6 +1016,15 @@ static void audio_mix_one_block(void)
+@@ -521,6 +1062,15 @@ static void audio_mix_one_block(void)
  
  static void audio_notify_event_queues(void)
  {
@@ -1026,7 +1077,7 @@ index b51fb7c4..dda413f7 100644
      /* Push the audio-period event (data1 = CELL_AUDIO_EVENT_MIX = 0) to each
       * registered notify queue, so the game's audio loop (blocked on
       * sys_event_queue_receive) wakes once per block and writes the next one.
-@@ -528,17 +1032,143 @@ static void audio_notify_event_queues(void)
+@@ -528,17 +1078,170 @@ static void audio_notify_event_queues(void)
      for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
          if (!s_notify_queues[i].in_use) continue;
          uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
@@ -1084,7 +1135,7 @@ index b51fb7c4..dda413f7 100644
 +        double step = block_us;
 +        if (any) {
 +            const double level = (double)audio_backend_queued_samples() / CELL_AUDIO_BLOCK_SAMPLES + audio_st_blocks() + unread;
-+            const double want = (double)s_q_target + AUDIO_DEV_BLOCKS;
++            const double want = (double)s_q_target + s_dev_min;
 +            ema += (level - ema) / 32.0;
 +            if (ema < want - 2.0 && max_lag < 0) step *= 0.99;
 +            else if (ema > want + 5.0) step *= 1.01;
@@ -1115,13 +1166,38 @@ index b51fb7c4..dda413f7 100644
 +    static float out[CELL_AUDIO_BLOCK_SAMPLES * 2];
 +    static double smooth = 1.0;
 +    static int filling;
-+    const double have = audio_st_blocks(), err = (double)s_q_target - have;
-+    if (have < 1.0) filling = 1; else if (err <= 0.0) filling = 0;
++    double have = audio_st_blocks();
++#if AUDIO_DEV_MAX_BLOCKS > AUDIO_DEV_BLOCKS
++    if (!audio_legacy()) { const double dq = (double)audio_backend_queued_samples() / CELL_AUDIO_BLOCK_SAMPLES;
++      if (dq > s_dev_min) have += dq - s_dev_min; }
++#endif
++    const double err = (double)s_q_target - have;
 +    double r = 1.0;
++#ifdef __APPLE__
++    /* After a hitch the game writes its backlog in one burst, then runs short
++     * again: answering each instant (0.97 on the burst, up to 1.8 from dry back
++     * to the target) kept the ratio off 1 most of the time, the stretching that
++     * is heard. Here a burst is just buffer: play fast only when the level stays
++     * high (a third of a second on average), and from dry stretch gently and only
++     * out of the dry zone -- the read index's 1% lean (audio_pub_tick) refills
++     * the rest through the game at ratio 1. */
++    (void)err;
++    if (!audio_legacy()) { static double slow;
++      slow += (have - slow) / 64.0;
++      if (have < 1.0) filling = 1; else if (have >= 4.0) filling = 0;
++      if (filling) r = 1.03 + (4.0 - have) * 0.05;
++      else if (slow - s_q_target > 20.0) r = 0.95;
++      else if (slow - s_q_target > 8.0) r = 0.98;
++      if (r > 1.25) r = 1.25; }
++    else
++#endif
++    {
++    if (have < 1.0) filling = 1; else if (err <= 0.0) filling = 0;
 +    if (filling) r = 1.02 + (err > 0.0 ? err : 0.0) * 0.1;
 +    else if (err < -20.0) r = 0.92;
 +    else if (err < -6.0) r = 0.97;
 +    if (r > 1.8) r = 1.8;
++    }
 +    smooth += (r - smooth) * 0.1;
 +    if (r == 1.0 && fabs(smooth - 1.0) < 0.01) smooth = 1.0;
 +    if (smooth > s_tr_rmax) s_tr_rmax = smooth;
@@ -1131,7 +1207,8 @@ index b51fb7c4..dda413f7 100644
 +    ast_set_ratio(&s_st, smooth);
 +    if (!ast_pull(&s_st, out, CELL_AUDIO_BLOCK_SAMPLES)) return 0;
 +    audio_wav_tap(out);
-+    if (s_sdl_audio_dev) SDL_QueueAudio(s_sdl_audio_dev, out, sizeof out);
++    if (audio_vdev()) { s_vq += CELL_AUDIO_BLOCK_SAMPLES; s_vdev_live = 1; }
++    else if (s_sdl_audio_dev) SDL_QueueAudio(s_sdl_audio_dev, out, sizeof out);
 +    return 1;
 +}
 +#endif
@@ -1149,9 +1226,9 @@ index b51fb7c4..dda413f7 100644
 +    if (!t0) { t0 = t; f0 = fin; p0 = s_pub_steps; st0 = s_st.stretched_steps; n0 = s_st.steps; d0 = s_st.dry_steps; fd0 = s_st.fades; return; }
 +    if (t - t0 < 1000000ull) return;
 +    const double sec = (double)(t - t0) / 1e6;
-+    fprintf(stderr, "[audio-trace] t=%.1f fin=%.1f/s pub=%.1f/s steps=%llu str=%llu dry=%llu fades=%llu skipev=%u rmax=%.3f rmin=%.3f hmin=%.2f qmin=%.2f target=%u gap=%.1fms%c",
++    fprintf(stderr, "[audio-trace] t=%.1f fin=%.1f/s pub=%.1f/s steps=%llu str=%llu dry=%llu fades=%llu skipev=%u rmax=%.3f rmin=%.3f hmin=%.2f qmin=%.2f target=%u gap=%.1fms vholes=%u vhole=%.0fms%c",
 +            (double)t / 1e6, (fin - f0) / sec, (s_pub_steps >= p0 ? s_pub_steps - p0 : s_pub_steps) / sec, s_st.steps - n0, s_st.stretched_steps - st0,
-+            s_st.dry_steps - d0, s_st.fades - fd0, s_late_skips >= sk0 ? s_late_skips - sk0 : s_late_skips, s_tr_rmax, s_tr_rmin, s_tr_hmin, s_tr_qmin, s_q_target, s_tr_gap / 1000.0, 10);
++            s_st.dry_steps - d0, s_st.fades - fd0, s_late_skips >= sk0 ? s_late_skips - sk0 : s_late_skips, s_tr_rmax, s_tr_rmin, s_tr_hmin, s_tr_qmin, s_q_target, s_tr_gap / 1000.0, s_vholes, s_vhole_ms, 10);
 +    t0 = t; f0 = fin; p0 = s_pub_steps; st0 = s_st.stretched_steps; n0 = s_st.steps; d0 = s_st.dry_steps; fd0 = s_st.fades; sk0 = s_late_skips;
 +    s_tr_rmax = s_tr_rmin = 1.0; s_tr_hmin = s_tr_qmin = 1e9; s_tr_gap = 0.0;
 +}
@@ -1171,11 +1248,12 @@ index b51fb7c4..dda413f7 100644
 +#endif
 +#if AUDIO_BACKEND_SDL2
 +    ast_init(&s_st);
++    if (audio_legacy()) { s_q_target = s_q_base = 6; s_dev_min = AUDIO_DEV_BLOCKS; }
 +#endif
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
       * the old Sleep(2)/Sleep(5) loop keyed on a queue depth the 1056-frame
-@@ -550,6 +1180,23 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -550,6 +1253,30 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      unsigned long long blocks = 0;
      while (s_mix_thread_running) {
          const int room = audio_backend_room();
@@ -1192,6 +1270,13 @@ index b51fb7c4..dda413f7 100644
 +            audio_late_report();
 +            audio_trace();
 +            while (audio_backend_room() > 0 && audio_output_stretched()) {}
++#if AUDIO_DEV_MAX_BLOCKS > AUDIO_DEV_BLOCKS
++            /* Beyond the minimum, only what the stretcher holds past a hop and a
++             * block: those steps are exact, ratio 1, no search. */
++            while (!audio_legacy() && audio_st_blocks() >= 3.0 &&
++                   audio_backend_queued_samples() < CELL_AUDIO_BLOCK_SAMPLES * AUDIO_DEV_MAX_BLOCKS &&
++                   audio_output_stretched()) {}
++#endif
 +            audio_backend_wait();
 +            continue;
 +        }
@@ -1199,7 +1284,7 @@ index b51fb7c4..dda413f7 100644
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
          if (room < 0) {
              LARGE_INTEGER now; QueryPerformanceCounter(&now);
-@@ -573,11 +1220,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -573,11 +1300,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
                  float a = s_mix_buffer[i]; if (a < 0) a = -a; if (a > pk) pk = a; }
              if ((++_n % 200) == 0 || (pk > 0.001f && _n < 40))
                  fprintf(stderr, "[audio-peak] block#%u peak=%.4f\n", _n, pk); } }
@@ -1212,7 +1297,7 @@ index b51fb7c4..dda413f7 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-@@ -600,35 +1243,28 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -600,35 +1323,28 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      }
  
      printf("[cellAudio] Mixing thread stopped\n");
@@ -1259,7 +1344,7 @@ index b51fb7c4..dda413f7 100644
  
  #ifdef _WIN32
      s_mix_thread = (HANDLE)_beginthreadex(NULL, 0, audio_mix_thread_func,
-@@ -699,15 +1335,9 @@ s32 cellAudioInit(void)
+@@ -699,15 +1415,9 @@ s32 cellAudioInit(void)
      }
  
  
@@ -1278,7 +1363,7 @@ index b51fb7c4..dda413f7 100644
      if (audio_start_mix_thread() < 0) {
          printf("[cellAudio] WARNING: Could not start mixing thread\n");
      }
-@@ -785,7 +1415,13 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
+@@ -785,7 +1495,13 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
      port->param.nChannel = nch;
      port->param.nBlock   = nblk;
      port->read_index  = 0;
@@ -1292,7 +1377,7 @@ index b51fb7c4..dda413f7 100644
  
      /* Allocate the audio buffer in GUEST memory so portAddr/readIndexAddr are
       * real guest addresses (the game's mixer -- FMOD here -- writes PCM there
-@@ -890,6 +1526,10 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -890,6 +1606,10 @@ s32 cellAudioPortStop(u32 portNum)
  
  s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  {
@@ -1303,7 +1388,7 @@ index b51fb7c4..dda413f7 100644
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -907,8 +1547,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -907,8 +1627,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
          mutex_unlock(&s_audio_mutex);
          return CELL_AUDIO_ERROR_PARAM;
      }
@@ -1314,7 +1399,7 @@ index b51fb7c4..dda413f7 100644
      mutex_unlock(&s_audio_mutex);
  
      vm_write64(tag_ea, t);
-@@ -917,6 +1557,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -917,6 +1637,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  
  s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
  {
@@ -1325,7 +1410,7 @@ index b51fb7c4..dda413f7 100644
      uint32_t stamp_ea = (uint32_t)(uintptr_t)stamp;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -928,7 +1572,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
+@@ -928,7 +1652,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
          return CELL_AUDIO_ERROR_PARAM;
  
      mutex_lock(&s_audio_mutex);
@@ -1334,7 +1419,7 @@ index b51fb7c4..dda413f7 100644
      mutex_unlock(&s_audio_mutex);
      if (tag > global_counter)
          return CELL_AUDIO_ERROR_TAG_NOT_FOUND;
-@@ -1074,7 +1718,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
+@@ -1074,7 +1798,7 @@ s32 cellAudioGetPortConfig(u32 portNum, CellAudioPortConfig* config)
      vm_write32(cfg + 24, port->buf_size);                                   /* portSize */
      vm_write32(cfg + 28, (u32)port->port_addr);                             /* portAddr */
  
@@ -20630,7 +20715,7 @@ index ecc53fce..e8d4ad69 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b79..a46a3a77 100644
+index e2687b79..f7b4f5ad 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -24503,11 +24588,8 @@ index e2687b79..a46a3a77 100644
 +            pvkDestroyFramebuffer(s_vk.device, s_e2.fb[i].fb, NULL);
      s_e2.fb_count = 0;
 +    s_bt.fb = VK_NULL_HANDLE;
- }
- 
--/* The render pass for `n` RGBA8 colour attachments plus depth, LOAD/STORE in
-- * GENERAL like the vtable path's: clears are separate operations. */
--static VkRenderPass vk_eng_render_pass(u32 n)
++}
++
 +/* Colour target formats with a render pass of their own: 0 RGBA8, 1 RGBA16F
 + * (SET_SURFACE_FORMAT 0xB -- A Crack in Time draws its pause-menu backdrop
 + * into a 240x176 one; without it the menu opened on the magenta "missing
@@ -24515,8 +24597,11 @@ index e2687b79..a46a3a77 100644
 +static int vk_eng_rt_fi(VkFormat f)
 +{
 +    return f == VK_FORMAT_R8G8B8A8_UNORM ? 0 : f == VK_FORMAT_R16G16B16A16_SFLOAT ? 1 : -1;
-+}
-+
+ }
+ 
+-/* The render pass for `n` RGBA8 colour attachments plus depth, LOAD/STORE in
+- * GENERAL like the vtable path's: clears are separate operations. */
+-static VkRenderPass vk_eng_render_pass(u32 n)
 +/* The render pass for `n` colour attachments of format `fi` plus depth,
 + * LOAD/STORE in GENERAL like the vtable path's: clears are separate
 + * operations. */
@@ -24584,7 +24669,7 @@ index e2687b79..a46a3a77 100644
      default:     return VK_BLEND_FACTOR_ONE;
      }
  }
-@@ -2484,168 +5198,888 @@ static VkStencilOp vk_gcm_stencil_op(u32 op)
+@@ -2484,168 +5198,902 @@ static VkStencilOp vk_gcm_stencil_op(u32 op)
      default:     return VK_STENCIL_OP_KEEP;               /* GL_KEEP 0x1E00 */
      }
  }
@@ -25042,6 +25127,7 @@ index e2687b79..a46a3a77 100644
 +static int s_pw_keep;
 +static SDL_atomic_t s_pw_next, s_pw_built, s_pw_failed, s_pw_absent, s_pw_live;
 +static u32 s_pw_taken;                 /* render thread: kept pipelines its draws took */
++static SDL_atomic_t s_pw_urgent;        /* the render thread is building or waiting for a pipeline */
 +static struct { vk_pw_spv* sp; u32 ns; unsigned long long t0; } s_pwj;
 +
 +static vk_pwk* vk_pwk_find(u64 key)
@@ -25070,6 +25156,10 @@ index e2687b79..a46a3a77 100644
 +    const vk_vdesc* recs = s_pw.recs;
 +    const u32 n = s_pw.n;
 +    while (f && buf && pc && !SDL_AtomicGet(&s_pw.stop)) {
++        /* A draw is waiting for a pipeline: Metal's compiler is the draw's
++         * now (it takes compiles in turn, and a queue of pre-warm builds ahead
++         * of the draw's held the frame for seconds). */
++        while ((SDL_AtomicGet(&s_pw_urgent) > 0 || SDL_AtomicGet(&s_ap.active) > 0) && !SDL_AtomicGet(&s_pw.stop)) SDL_Delay(2);
 +        const u32 i = (u32)SDL_AtomicAdd(&s_pw_next, 1);
 +        if (i >= n) break;
 +        const vk_vdesc* d = &recs[i];
@@ -25450,6 +25540,7 @@ index e2687b79..a46a3a77 100644
 +    s_ap.th = NULL; s_ap.off = 1;
  }
  
++static VkPipeline vk_eng_variant_make(vk_eng_pipe* P, u32 topo_idx);
  static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
  {
 -    static const VkPrimitiveTopology topo[VK_ENG_TOPOLOGIES] = {
@@ -25458,6 +25549,14 @@ index e2687b79..a46a3a77 100644
 -        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
      if (P->variant[topo_idx]) return P->variant[topo_idx];
 -    VkRenderPass rp = vk_eng_render_pass(P->rt_count);
++    SDL_AtomicAdd(&s_pw_urgent, 1);
++    const VkPipeline v = vk_eng_variant_make(P, topo_idx);
++    SDL_AtomicAdd(&s_pw_urgent, -1);
++    return v;
++}
++static VkPipeline vk_eng_variant_make(vk_eng_pipe* P, u32 topo_idx)
++{
++    if (P->variant[topo_idx]) return P->variant[topo_idx];
 +    if (vk_ap_mode() == 2)
 +        while (SDL_AtomicGet(&P->pend[topo_idx]) == 1) { vk_keep_responsive(); SDL_Delay(1); }   /* never skipped */
 +    const int pend = SDL_AtomicGet(&P->pend[topo_idx]);
@@ -25615,7 +25714,7 @@ index e2687b79..a46a3a77 100644
      }
      return P->variant[topo_idx];
  }
-@@ -2654,15 +6088,20 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
+@@ -2654,15 +6102,20 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
  
  static void vk_eng2_shutdown(void* user)
  {
@@ -25638,7 +25737,7 @@ index e2687b79..a46a3a77 100644
  }
  
  /* Constants go straight into the shared UBO: vertex at 0, pixel at ps_off.
-@@ -2673,8 +6112,11 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
+@@ -2673,8 +6126,11 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
      if (!s_g.on || !data) { s_e2.vs_bytes = 0; return; }
      const u32 cap = (u32)s_g.ps_off;
      if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 2u)) { VK_LOG("engine: VS constants truncated\n"); s_e2.warned |= 2u; } }
@@ -25651,7 +25750,7 @@ index e2687b79..a46a3a77 100644
  }
  static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
  {
-@@ -2682,17 +6124,31 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
+@@ -2682,17 +6138,31 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
      if (!s_g.on || !data) { s_e2.ps_bytes = 0; return; }
      const u32 cap = (u32)(s_g.ubo.size - s_g.ps_off);
      if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 4u)) { VK_LOG("engine: PS constants truncated\n"); s_e2.warned |= 4u; } }
@@ -25686,7 +25785,7 @@ index e2687b79..a46a3a77 100644
      }
      s_e2.tex_mask = mask;
  }
-@@ -2713,6 +6169,11 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
+@@ -2713,6 +6183,11 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
      s_e2.sc[0] = x; s_e2.sc[1] = y; s_e2.sc[2] = w; s_e2.sc[3] = h; s_e2.have_sc = 1;
  }
  static void vk_eng_set_stencil_ref(void* user, u32 ref) { (void)user; s_e2.stencil_ref = ref; }
@@ -25698,7 +25797,7 @@ index e2687b79..a46a3a77 100644
  
  static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, VkImageView dview,
                                          u32 dkey, u32 w, u32 h)
-@@ -2730,7 +6191,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
+@@ -2730,7 +6205,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
                                      .renderPass = rp, .attachmentCount = n + 1, .pAttachments = views,
                                      .width = w, .height = h, .layers = 1 };
      VkFramebuffer fb = VK_NULL_HANDLE;
@@ -25707,7 +25806,7 @@ index e2687b79..a46a3a77 100644
      memcpy(s_e2.fb[s_e2.fb_count].key, key, sizeof key);
      s_e2.fb[s_e2.fb_count++].fb = fb;
      return fb;
-@@ -2744,19 +6205,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
+@@ -2744,19 +6219,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
          return s_e2.scratch_depth.view;
      vk_eng_drop_framebuffers();
      vk_destroy_image(&s_e2.scratch_depth);
@@ -25813,7 +25912,7 @@ index e2687b79..a46a3a77 100644
  static int vk_eng_ensure_indices(VkDeviceSize bytes)
  {
      if (s_e2.indices.buf && s_e2.indices.size >= bytes) return 0;
-@@ -2777,23 +6320,62 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
+@@ -2777,23 +6334,62 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
                    | ((u64)d->mip_present << 3) | ((u64)(d->wrap_s & 0xF) << 4)
                    | ((u64)(d->wrap_t & 0xF) << 8) | ((u64)(d->wrap_r & 0xF) << 12)
                    | ((u64)(lo >> 16) << 16) | ((u64)(hi >> 16) << 32);
@@ -25884,7 +25983,7 @@ index e2687b79..a46a3a77 100644
      return smp;
  }
  
-@@ -2807,67 +6389,474 @@ static VkImageView vk_eng_sample_view(u32 handle)
+@@ -2807,67 +6403,474 @@ static VkImageView vk_eng_sample_view(u32 handle)
                 ? o->im.view : VK_NULL_HANDLE;
  }
  
@@ -26381,7 +26480,7 @@ index e2687b79..a46a3a77 100644
      if (vk_ensure_vertex_buffer(vbytes)) return;
      memcpy(s_vk.vertices.ptr, vertices, (size_t)vbytes);
      if (indices && index_count) {
-@@ -2880,30 +6869,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2880,30 +6883,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      /* Everything submitted before is complete (each submission is waited
       * on); this orders memory for the surfaces this draw touches. */
      for (u32 i = 0; i < n; i++)
@@ -26419,7 +26518,7 @@ index e2687b79..a46a3a77 100644
      VkDeviceSize off = 0;
      pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &s_vk.vertices.buf, &off);
      if (indices && index_count) {
-@@ -2916,6 +6893,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2916,6 +6907,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      vk_submit_and_wait();
  }
  
@@ -26448,7 +26547,7 @@ index e2687b79..a46a3a77 100644
  static const rsx_draw_backend s_vk_engine_backend = {
      .user                 = NULL,
      .init                 = vk_eng_init,
-@@ -2930,6 +6929,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2930,6 +6943,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .depth_target_create  = vk_eng_depth_target_create,
      .depth_target_release = vk_eng_release,
      .depth_snapshot       = vk_eng_depth_snapshot,
@@ -26462,7 +26561,7 @@ index e2687b79..a46a3a77 100644
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
      .bind_targets         = vk_eng_bind_targets,
-@@ -2941,6 +6947,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2941,6 +6961,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .set_viewport         = vk_eng_set_viewport,
      .set_scissor          = vk_eng_set_scissor,
      .set_stencil_ref      = vk_eng_set_stencil_ref,
@@ -26471,7 +26570,7 @@ index e2687b79..a46a3a77 100644
      .draw                 = vk_eng_draw,
      .clear_color          = vk_eng_clear_color,
      .clear_depth_stencil  = vk_eng_clear_depth_stencil,
-@@ -2969,8 +6977,37 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2969,8 +6991,37 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      s_vk.height = height ? height : 720;
      s_vk.dump_path = getenv("PS3RECOMP_VK_DUMP");
  
@@ -26509,7 +26608,7 @@ index e2687b79..a46a3a77 100644
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                .pApplicationName = "ps3recomp", .pEngineName = "ps3recomp RSX",
-@@ -2981,11 +7018,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2981,11 +7032,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          ci.enabledExtensionCount   = s_vk.inst_ext_count;
          ci.ppEnabledExtensionNames = s_vk.inst_exts;
      }
@@ -26545,7 +26644,7 @@ index e2687b79..a46a3a77 100644
          ir = pvkCreateInstance(&ci, NULL, &s_vk.instance);
      }
      if (ir != VK_SUCCESS) { VK_LOG("vkCreateInstance failed (VkResult %d)\n", (int)ir); return -1; }
-@@ -2999,30 +7060,104 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2999,30 +7074,104 @@ static int vk_init_all(u32 width, u32 height, const char* title)
              vk_window_drop(why);
          }
      }
@@ -26654,7 +26753,7 @@ index e2687b79..a46a3a77 100644
      if (vk_load_device_functions()) return -1;
      if (s_vk.windowed && vk_load_wsi_device_functions())
          vk_window_drop("the driver has no swapchain functions");
-@@ -3039,11 +7174,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3039,11 +7188,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      VK_CHECK(pvkAllocateCommandBuffers(s_vk.device, &cai, &s_vk.cmd), "vkAllocateCommandBuffers");
      VkFenceCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
      VK_CHECK(pvkCreateFence(s_vk.device, &fci, NULL, &s_vk.fence), "vkCreateFence");
@@ -26671,7 +26770,7 @@ index e2687b79..a46a3a77 100644
      if (vk_create_image(&s_vk.depth, s_vk.depth_format, s_vk.width, s_vk.height,
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) return -1;
-@@ -3051,6 +7190,7 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3051,6 +7204,7 @@ static int vk_init_all(u32 width, u32 height, const char* title)
                                VK_BUFFER_USAGE_TRANSFER_DST_BIT)) return -1;
      if (vk_create_render_pass()) return -1;
      if (vk_create_pipeline_objects()) return -1;
@@ -26679,7 +26778,7 @@ index e2687b79..a46a3a77 100644
      if (vk_guest_init()) {
          VK_LOG("guest programs: setup failed, fixed-function path only\n");
          vk_guest_shutdown();
-@@ -3071,6 +7211,7 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3071,6 +7225,7 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      pvkCmdClearColorImage(s_vk.cmd, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL, &black, 1, &cr);
      pvkCmdClearDepthStencilImage(s_vk.cmd, s_vk.depth.img, VK_IMAGE_LAYOUT_GENERAL, &far_plane, 1, &dr);
      if (vk_submit_and_wait()) return -1;
@@ -26687,7 +26786,7 @@ index e2687b79..a46a3a77 100644
  
      if (s_vk.windowed) {
          VkSemaphoreCreateInfo semi = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-@@ -3081,9 +7222,43 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3081,9 +7236,43 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      return 0;
  }
  
@@ -26731,7 +26830,7 @@ index e2687b79..a46a3a77 100644
      if (vk_init_all(width, height, title)) {
          rsx_vulkan_backend_shutdown();
          return -1;
-@@ -3097,13 +7272,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -3097,13 +7286,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
       * pipeline from the guest's programs, so without them it has nothing to
       * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
@@ -26748,7 +26847,7 @@ index e2687b79..a46a3a77 100644
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
             s_vk.width, s_vk.height, (int)s_vk.depth_format, title ? title : "");
      return 0;
-@@ -3125,7 +7301,9 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3125,7 +7315,9 @@ void rsx_vulkan_backend_shutdown(void)
      }
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
@@ -26758,7 +26857,7 @@ index e2687b79..a46a3a77 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -3145,6 +7323,7 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3145,6 +7337,7 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -26766,7 +26865,7 @@ index e2687b79..a46a3a77 100644
          if (s_vk.fence) pvkDestroyFence(s_vk.device, s_vk.fence, NULL);
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          pvkDestroyDevice(s_vk.device, NULL);
-@@ -3157,12 +7336,16 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3157,12 +7350,16 @@ void rsx_vulkan_backend_shutdown(void)
  
  int rsx_vulkan_backend_pump_messages(void)
  {
@@ -26784,7 +26883,7 @@ index e2687b79..a46a3a77 100644
      }
      return quit ? -1 : 0;
  }
-@@ -3186,4 +7369,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
+@@ -3186,4 +7383,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
      return s_vk.eng_active ? rsx_draw_engine_guest_draws() : s_g.last_draws;
  }
  
