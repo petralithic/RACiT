@@ -19735,7 +19735,7 @@ index ba6c18eb..d8a38074 100644
          "    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n"
          "    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n"
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index f78c66f2..44b73531 100644
+index f78c66f2..0b3ecbe0 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -19753,7 +19753,7 @@ index f78c66f2..44b73531 100644
  
  #include "rsx_vulkan_backend.h"
  #include "rsx_vertex_fetch.h"
-@@ -52,14 +55,41 @@
+@@ -52,17 +55,44 @@
  #include "rsx_draw_engine.h"
  #include "vulkan/rsx_vk_fallback_vert.spv.h"
  #include "vulkan/rsx_vk_fallback_frag.spv.h"
@@ -19771,6 +19771,7 @@ index f78c66f2..44b73531 100644
   * opens the optional window. Same include style as those two. */
  #include <SDL2/SDL.h>
  #include <SDL2/SDL_vulkan.h>
++#include <stdio.h>
  
 -#include <dlfcn.h>
 -#include <pthread.h>
@@ -19796,7 +19797,10 @@ index f78c66f2..44b73531 100644
 +#endif
  #include <stddef.h>
  #include <stdint.h>
- #include <stdio.h>
+-#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
 @@ -93,20 +123,21 @@
      X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) X(vkResetDescriptorPool) \
      X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
@@ -22802,8 +22806,11 @@ index f78c66f2..44b73531 100644
      if (!handle || handle >= VK_ENG_MAX_OBJ) return NULL;
      vk_eng_obj* o = &s_eobj[handle];
 -    return (o->kind == kind) ? o : NULL;
--}
--
++    if (o->kind != kind) return NULL;
++    if (o->lazy && vk_eng_color_back(o)) return NULL;
++    return o;
+ }
+ 
 -/* Host staging kept across readbacks and uploads. One buffer allocated,
 - * mapped and freed per call is three driver round trips, and on Windows
 - * those took from tens of milliseconds to seconds each under load. Each
@@ -22818,11 +22825,8 @@ index f78c66f2..44b73531 100644
 -    while (cap < size) cap *= 2u;
 -    if (vk_create_host_buffer(b, cap, usage)) { vk_destroy_buffer(b); return NULL; }
 -    return b;
-+    if (o->kind != kind) return NULL;
-+    if (o->lazy && vk_eng_color_back(o)) return NULL;
-+    return o;
- }
- 
+-}
+-
 -/* Copy `rows` rows of `w` texels from host memory into a w x h rectangle at
 - * (x, y) of one level / layer of an image that is in GENERAL. */
 -static int vk_eng_upload_region(VkImage img, u32 layer, u32 mip, u32 x, u32 y,
