@@ -108,7 +108,6 @@ extern int32_t g_sys_process_exit_code;
 uint8_t* vm_base = nullptr;
 extern "C" void racacit_ring_dump(void);   /* spu_channels.c: RACACIT_LINE_RING */
 extern "C" uint32_t ppu_hle_inject_base;   /* libs/video/cellGcmSys.c */
-extern "C" uint32_t sys_mapper_base;       /* runtime/syscalls/sys_memory.c */
 extern uint32_t ppu_vm_size;                  /* ppu_loader.cpp: the OOB guard */
 
 /* At a stall: the state of the game's SPU job queues, always (owner logs have
@@ -188,9 +187,6 @@ extern void (*g_gcm_wake_walker)(void);       /* wake frame_clock for a drain no
  * path anywhere else -- the same selection runtime/host/host_posix.c and the
  * toolkit's boot harness make. All three expose the same three entry points,
  * so the frame clock below is backend-agnostic. */
-/* The runtime provides these with any backend (rsx_host_ui.c, rsx_draw_engine.c). */
-extern "C" int  rsx_host_ui_modal(void);
-extern "C" unsigned long long g_rt_drain_total_us, g_rt_present_total_us;
 #if defined(_WIN32) && !defined(RACACIT_HAVE_VULKAN)
 extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_d3d12_backend_present(void);
@@ -237,6 +233,8 @@ extern "C" int  rsx_null_backend_pump_messages(void);
 #  if defined(RACACIT_HAVE_VULKAN)
 extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_vulkan_backend_present(void);
+extern "C" int  rsx_host_ui_modal(void);
+extern "C" unsigned long long g_rt_drain_total_us, g_rt_present_total_us;
 extern "C" int  rsx_vulkan_backend_pump_messages(void);
 #  endif
 static void (*g_rsx_present)(void) = rsx_null_backend_present;
@@ -795,6 +793,7 @@ static DWORD WINAPI frame_clock(LPVOID)
 /* Derive the directory holding PS3_GAME from the EBOOT path
  * <root>/PS3_GAME/USRDIR/EBOOT.elf -> <root>. $PS3_VFS_ROOT overrides. */
 static char s_vfs_root[1024];
+extern bool racit_menu_archive_init();
 
 static void derive_vfs_root(const char* eboot)
 {
@@ -1533,6 +1532,7 @@ int main(int argc, char** argv)
     setenv("MVK_CONFIG_FAST_MATH_ENABLED", "0", 0);
     setenv("RACACIT_ASYNC_PIPELINES", "0", 0);
     setenv("RACACIT_HLE_SPURS", "1", 0);
+    setenv("RACACIT_KBM", "1", 0);
     setenv("PS3RECOMP_VK_WINDOW", "1", 0);
 #endif
 #ifdef __ANDROID__
@@ -1585,12 +1585,9 @@ int main(int argc, char** argv)
         /* The lifted code is built with PPU_INL_NO_HOLE (game/CMakeLists.txt):
          * ppu_run ends its inline memory window below that page instead. */
         ppu_inl_clip_hole = 1;
-        /* The title reserves its 256 MB heap with sys_mmapper_allocate_address
-         * and has always been given 0x20000000, where the GCM IO setup above
-         * expects it. ps3recomp v0.19 starts mapper regions at 0x40000000. */
-        sys_mapper_base = 0x20000000u;
     }
 
+    if (!racit_menu_archive_init()) return 1;
     uint32_t entry = ppu_load_elf(argv[1]);
     if (!entry) {
         fprintf(stderr, "ERROR: could not load %s\n", argv[1]);

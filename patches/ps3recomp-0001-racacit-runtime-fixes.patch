@@ -350,7 +350,7 @@ index 00000000..68a27955
 +
 +#endif /* AUDIO_STRETCH_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index f231ea26..e4b21434 100644
+index f231ea26..4ecc651b 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -13,12 +13,17 @@
@@ -1013,7 +1013,7 @@ index f231ea26..e4b21434 100644
      /* Push the audio-period event (data1 = CELL_AUDIO_EVENT_MIX = 0) to each
       * registered notify queue, so the game's audio loop (blocked on
       * sys_event_queue_receive) wakes once per block and writes the next one.
-@@ -567,11 +1053,66 @@ static void audio_notify_event_queues(void)
+@@ -567,12 +1053,67 @@ static void audio_notify_event_queues(void)
      for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
          if (!s_notify_queues[i].in_use) continue;
          uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
@@ -1024,9 +1024,9 @@ index f231ea26..e4b21434 100644
                                         0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0);
 +            if (rc == 0) g_audio_push_ok++; else g_audio_push_fail++;
 +        } else g_audio_push_fail++;
-+    }
-+}
-+
+     }
+ }
+ 
 +/* The clock of what the game sees: one step per block in real time, with the
 + * period event its frame waits on. The step leans 1% to keep what is buffered
 + * (device queue + stretcher + finished unread blocks) near the target: the device's clock
@@ -1076,13 +1076,14 @@ index f231ea26..e4b21434 100644
 +        }
 +        t_next += step;
 +        audio_notify_event_queues();
-     }
- }
++    }
++}
 +#endif
- 
++
  /* The loudest sample of the block just mixed (AUDIO_PEAK). */
  static float audio_mix_peak(void)
-@@ -584,23 +1125,57 @@ static float audio_mix_peak(void)
+ {
+@@ -584,23 +1125,60 @@ static float audio_mix_peak(void)
      return pk;
  }
  
@@ -1140,6 +1141,9 @@ index f231ea26..e4b21434 100644
      printf("[cellAudio] Mixing thread started\n");
 +    /* It carries the clock the game's synth runs on (audio_pub_tick) and does
 +     * little else: a late wake here is a late read index for the whole game. */
++#ifdef _WIN32
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
++#endif
 +#if AUDIO_BACKEND_SDL2
 +    ast_init(&s_st);
 +#endif
@@ -1148,7 +1152,7 @@ index f231ea26..e4b21434 100644
      /* The device deadline is every few ms and the guest threads keep every
       * core busy: run this one ahead of them (MMCSS "Pro Audio" when the
       * service is there, the highest normal priority anyway). avrt.dll is
-@@ -612,6 +1187,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -612,6 +1190,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
        DWORD task = 0;
        if (set_mm && !set_mm(L"Pro Audio", &task))
            fprintf(stderr, "[cellAudio] MMCSS Pro Audio unavailable (%lu)%c", (unsigned long)GetLastError(), 10); }
@@ -1156,7 +1160,7 @@ index f231ea26..e4b21434 100644
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
       * the old Sleep(2)/Sleep(5) loop keyed on a queue depth the 1056-frame
-@@ -623,6 +1199,22 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -623,6 +1202,22 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      unsigned long long blocks = 0;
      while (s_mix_thread_running) {
          const int room = audio_backend_room();
@@ -1179,7 +1183,7 @@ index f231ea26..e4b21434 100644
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
  #if AUDIO_BACKEND_WASAPI
          /* Device queue under half a block: it is about to play silence (an
-@@ -650,7 +1242,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -650,7 +1245,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
            if (_ap) { static unsigned _n = 0; const float pk = audio_mix_peak();
              if ((++_n % 200) == 0 || (pk > 0.001f && _n < 40))
                  fprintf(stderr, "[audio-peak] block#%u peak=%.4f\n", _n, pk); } }
@@ -1188,7 +1192,7 @@ index f231ea26..e4b21434 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-@@ -675,43 +1267,28 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -675,43 +1270,28 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      }
  
      printf("[cellAudio] Mixing thread stopped\n");
@@ -1243,7 +1247,7 @@ index f231ea26..e4b21434 100644
  
  #ifdef _WIN32
      s_mix_thread = (HANDLE)_beginthreadex(NULL, 0, audio_mix_thread_func,
-@@ -782,15 +1359,9 @@ s32 cellAudioInit(void)
+@@ -782,15 +1362,9 @@ s32 cellAudioInit(void)
      }
  
  
@@ -1262,7 +1266,7 @@ index f231ea26..e4b21434 100644
      if (audio_start_mix_thread() < 0) {
          printf("[cellAudio] WARNING: Could not start mixing thread\n");
      }
-@@ -868,7 +1439,13 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
+@@ -868,7 +1442,13 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
      port->param.nChannel = nch;
      port->param.nBlock   = nblk;
      port->read_index  = 0;
@@ -1276,7 +1280,7 @@ index f231ea26..e4b21434 100644
  
      /* Allocate the audio buffer in GUEST memory so portAddr/readIndexAddr are
       * real guest addresses (the game's mixer -- FMOD here -- writes PCM there
-@@ -973,6 +1550,10 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -973,6 +1553,10 @@ s32 cellAudioPortStop(u32 portNum)
  
  s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  {
@@ -1287,7 +1291,7 @@ index f231ea26..e4b21434 100644
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -990,8 +1571,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -990,8 +1574,8 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
          mutex_unlock(&s_audio_mutex);
          return CELL_AUDIO_ERROR_PARAM;
      }
@@ -1298,7 +1302,7 @@ index f231ea26..e4b21434 100644
      mutex_unlock(&s_audio_mutex);
  
      vm_write64(tag_ea, t);
-@@ -1000,6 +1581,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
+@@ -1000,6 +1584,10 @@ s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  
  s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
  {
@@ -1309,7 +1313,7 @@ index f231ea26..e4b21434 100644
      uint32_t stamp_ea = (uint32_t)(uintptr_t)stamp;
      if (!s_audio_initialized)
          return CELL_AUDIO_ERROR_NOT_INIT;
-@@ -1011,7 +1596,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
+@@ -1011,7 +1599,7 @@ s32 cellAudioGetPortTimestamp(u32 portNum, u64 tag, u64* stamp)
          return CELL_AUDIO_ERROR_PARAM;
  
      mutex_lock(&s_audio_mutex);
@@ -2243,8 +2247,30 @@ index edc79cb4..04efd3a6 100644
  static u16 be16(const void* p)
  {
      const u8* b = (const u8*)p;
+diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
+index 4d916ac7..dfd66773 100644
+--- a/libs/filesystem/cellFs.c
++++ b/libs/filesystem/cellFs.c
+@@ -9,6 +9,7 @@
+ #include "../../runtime/platform/win32_backtrace.h"   /* RtlCaptureStackBackTrace / GetModuleHandleA on POSIX */
+ #include "ps3emu/endian.h"
+ #include <stdio.h>
++extern void racit_menu_archive_path(char* path, size_t capacity, int read_only);
+ #include <string.h>
+ #include <stdlib.h>
+ #include <sys/stat.h>
+@@ -453,6 +454,9 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+         return (s32)CELL_ENOENT;
+     }
+ 
++    racit_menu_archive_path(host_path, sizeof host_path,
++        (flags & (CELL_FS_O_ACCMODE | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND)) == CELL_FS_O_RDONLY);
++
+     /* If creating, ensure parent directories exist */
+     if (flags & CELL_FS_O_CREAT) {
+         ensure_parent_dirs(host_path);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 5f8a2fa2..5b823a8d 100644
+index 5f8a2fa2..b6ba50df 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -13,11 +13,13 @@
@@ -3007,7 +3033,7 @@ index 5f8a2fa2..5b823a8d 100644
  
          s_host_state[i].buttons = btns;
  
-@@ -707,11 +1210,255 @@ static void pad_poll_sdl2(void)
+@@ -707,11 +1210,250 @@ static void pad_poll_sdl2(void)
          s_host_state[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
          s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
          s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
@@ -3046,9 +3072,9 @@ index 5f8a2fa2..5b823a8d 100644
 +    { "CIRCLE",   CELL_PAD_CTRL_CIRCLE,   "E,Backspace" },
 +    { "SQUARE",   CELL_PAD_CTRL_SQUARE,   "F" },
 +    { "TRIANGLE", CELL_PAD_CTRL_TRIANGLE, "Q" },
-+    { "L1",       CELL_PAD_CTRL_L1,       "Mouse3" },          /* strafe / aim (right mouse button) */
++    { "L1",       CELL_PAD_CTRL_L1,       "Left Ctrl" },          /* Left Ctrl */
 +    { "R1",       CELL_PAD_CTRL_R1,       "Mouse1" },          /* fire (left mouse button) */
-+    { "L2",       CELL_PAD_CTRL_L2,       "Left Ctrl" },
++    { "L2",       CELL_PAD_CTRL_L2,       "Mouse3" },
 +    { "R2",       CELL_PAD_CTRL_R2,       "Left Shift" },
 +    { "L3",       CELL_PAD_CTRL_L3,       "V" },
 +    { "R3",       CELL_PAD_CTRL_R3,       "Mouse2,B" },        /* middle mouse button */
@@ -3071,6 +3097,8 @@ index 5f8a2fa2..5b823a8d 100644
 +/* An input: a scancode (< 512), or 512 + mouse button 1-5, or 520/521 the wheel. */
 +#define KB_MAX_KEYS 4
 +static int s_kb_keys[KB_N][KB_MAX_KEYS];
++static SDL_atomic_t s_racit_keyboard_prompts = {1};
++int racit_keyboard_prompts_active(void) { return SDL_AtomicGet(&s_racit_keyboard_prompts); }
 +static int s_kbm_on = -1;             /* allowed this run (PAD_NO_KEYBOARD) */
 +extern volatile int g_racacit_kbm_on;   /* rsx_host_ui.c: capture the mouse on a click */
 +
@@ -3137,6 +3165,7 @@ index 5f8a2fa2..5b823a8d 100644
 +    hs->connected = 1;   /* with no controller the keyboard is the pad (pad_poll_sdl2 left it neutral) */
 +    u16 btns = 0;
 +    for (int k = 0; k < KB_N; k++) if (held[k] && k_kb[k].btn) btns |= k_kb[k].btn;
++    if (btns || dx || dy || wheel || mb || held[KB_LS_UP] || held[KB_LS_DOWN] || held[KB_LS_LEFT] || held[KB_LS_RIGHT]) SDL_AtomicSet(&s_racit_keyboard_prompts,1);
 +    hs->buttons |= btns;
 +    if (btns & CELL_PAD_CTRL_L2) hs->trigger_l2 = 255;
 +    if (btns & CELL_PAD_CTRL_R2) hs->trigger_r2 = 255;
@@ -3161,26 +3190,18 @@ index 5f8a2fa2..5b823a8d 100644
 +     * a slow move still turns; smoothed over a few polls (mouse reports come
 +     * in bursts). */
 +    {
-+        static Uint64 last; static float sx, sy;
-+        const Uint64 now = SDL_GetPerformanceCounter();
-+        float dt = last ? (float)((double)(now - last) * 1000.0 / (double)SDL_GetPerformanceFrequency()) : 16.0f;   /* ms */
-+        last = now;
-+        if (dt < 1.0f) dt = 1.0f;
-+        if (dt > 50.0f) dt = 50.0f;
-+        float vx = 0.0f, vy = 0.0f;
-+        if (captured && (dx || dy)) {
-+            const float k = 0.11f * (float)opt.mouse_sens / 100.0f, dz = 0.22f;
-+            float ax = fabsf((float)dx) / dt * k, ay = fabsf((float)dy) / dt * k;
-+            if (ax > 0.0f) ax = dz + (1.0f - dz) * (ax > 1.0f ? 1.0f : ax);
-+            if (ay > 0.0f) ay = dz + (1.0f - dz) * (ay > 1.0f ? 1.0f : ay);
-+            vx = dx < 0 ? -ax : ax; vy = dy < 0 ? -ay : ay;
-+            if (opt.mouse_invert) vy = -vy;
-+        }
-+        sx += (vx - sx) * 0.6f; sy += (vy - sy) * 0.6f;
-+        if (fabsf(sx) < 0.02f) sx = 0.0f;
-+        if (fabsf(sy) < 0.02f) sy = 0.0f;
-+        float rx = sx, ry = sy;
++        struct RacitMouseState { uint64_t epoch_ns; int64_t dx,dy; float x,y; };
++        extern void racit_mouse_step(struct RacitMouseState*,uint64_t,int,int,int,float,int);
++        extern void racit_camera_feed(uint64_t,int,int,int,float,int);
++        extern int racit_camera_follow_active(uint64_t);
++        static struct RacitMouseState motion;
++        const uint64_t now_ns=(uint64_t)((double)SDL_GetPerformanceCounter()*1000000000.0/(double)SDL_GetPerformanceFrequency());
++        racit_mouse_step(&motion,now_ns,dx,dy,captured,(float)opt.mouse_sens,opt.mouse_invert);
++        racit_camera_feed(now_ns,dx,dy,captured,(float)opt.mouse_sens,opt.mouse_invert);
++        const int direct_follow=racit_camera_follow_active(now_ns);
++        float rx=direct_follow ? 0.0f : motion.x, ry=direct_follow ? 0.0f : motion.y;
 +        const float kx = (float)(held[KB_RS_RIGHT] - held[KB_RS_LEFT]), ky = (float)(held[KB_RS_DOWN] - held[KB_RS_UP]);
++        if (kx || ky) racit_camera_feed(now_ns,0,0,0,(float)opt.mouse_sens,opt.mouse_invert);
 +        if (!rx && !ry && (kx || ky)) { rx = kx * 0.8f; ry = ky * 0.8f; }
 +        if (rx || ry) {
 +            hs->analog_rx = (u8)(128.0f + 127.0f * (rx > 1.0f ? 1.0f : rx < -1.0f ? -1.0f : rx));
@@ -3263,7 +3284,7 @@ index 5f8a2fa2..5b823a8d 100644
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
              /* The game is not always the focused app: on macOS its window
-@@ -729,12 +1476,11 @@ static void pad_init_backend(void)
+@@ -729,12 +1471,12 @@ static void pad_init_backend(void)
              SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
          }
          s_sdl_inited = 1;
@@ -3275,10 +3296,11 @@ index 5f8a2fa2..5b823a8d 100644
 -    /* Open any controllers already connected */
 -    pad_sdl_hotplug(1);
 +    pad_sdl_attach();
++    SDL_AtomicSet(&s_racit_keyboard_prompts, s_sdl_controllers[0] == NULL);
  }
  
  static void pad_shutdown_backend(void)
-@@ -776,6 +1522,62 @@ static unsigned long long pad_now_ms(void)
+@@ -776,6 +1518,62 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -3341,7 +3363,7 @@ index 5f8a2fa2..5b823a8d 100644
  static void pad_poll_backend(void)
  {
      static unsigned long long s_last_ms = 0;
-@@ -793,7 +1595,27 @@ static void pad_poll_backend(void)
+@@ -793,7 +1591,33 @@ static void pad_poll_backend(void)
  #elif PAD_BACKEND_SDL2
      pad_poll_sdl2();
  #endif
@@ -3362,6 +3384,12 @@ index 5f8a2fa2..5b823a8d 100644
 +          s_host_state[i].sensor_x = s_host_state[i].sensor_y = s_host_state[i].sensor_z = s_host_state[i].sensor_g = 512;
 +      } }
 +#if PAD_BACKEND_SDL2
++    if (!ign) {
++        const PadHostState* h = &s_host_state[0];
++        if (h->connected && (h->buttons || h->analog_lx < 100 || h->analog_lx > 156 ||
++            h->analog_ly < 100 || h->analog_ly > 156 || h->analog_rx < 100 || h->analog_rx > 156 ||
++            h->analog_ry < 100 || h->analog_ry > 156)) SDL_AtomicSet(&s_racit_keyboard_prompts,0);
++    }
 +    pad_poll_kbm(ign);
 +#endif
 +    pad_note_human();
@@ -3369,7 +3397,7 @@ index 5f8a2fa2..5b823a8d 100644
      pad_track_assign();
      pad_unlock();
  }
-@@ -867,6 +1689,103 @@ void cellPad_poll(void)
+@@ -867,6 +1691,103 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -3473,7 +3501,7 @@ index 5f8a2fa2..5b823a8d 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -883,6 +1802,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+@@ -883,6 +1804,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  
      /* Poll fresh state */
      pad_poll_backend();
@@ -3481,7 +3509,7 @@ index 5f8a2fa2..5b823a8d 100644
  
      /* YDKJ_INJECT_PAD: the game's wait loop polls the pad (cellPadSetActDirect /
       * GetData) -- if it's parked on a "press button" prompt after loading, no
-@@ -977,7 +1897,7 @@ skip_inject: ;
+@@ -977,7 +1899,7 @@ skip_inject: ;
       * human at the pad. Env-gated test scaffolding, off by default. */
      { static int s_ap = -1; static unsigned s_apn = 0;
        if (s_ap < 0) s_ap = getenv("PAD_AUTOPRESS") ? 1 : 0;
@@ -3490,7 +3518,7 @@ index 5f8a2fa2..5b823a8d 100644
            unsigned ph = s_apn++ % 240;
            if (ph < 12)
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= 0x40;   /* CROSS */
-@@ -1013,7 +1933,7 @@ skip_inject: ;
+@@ -1013,7 +1935,7 @@ skip_inject: ;
                       *p ? " -- TRUNCATED at 256, the rest are ignored" : "");
            }
        }
@@ -3499,7 +3527,7 @@ index 5f8a2fa2..5b823a8d 100644
            double now = pad_clock(t0);
            /* Latch, do not window. A fixed time window is missed whenever the
             * title stops polling the pad for longer than the window (it does
-@@ -1050,21 +1970,57 @@ skip_inject: ;
+@@ -1050,21 +1972,57 @@ skip_inject: ;
       */
      { static int s_pf = -1; static char pf_path[512];
        static unsigned held_mask = 0; static int held_n = 0;
@@ -3567,7 +3595,7 @@ index 5f8a2fa2..5b823a8d 100644
                    fclose(f);
                    if (held_n > 0) { FILE* w = fopen(pf_path, "wb"); if (w) fclose(w); }
                }
-@@ -1072,9 +2028,30 @@ skip_inject: ;
+@@ -1072,9 +2030,30 @@ skip_inject: ;
            if (held_n > 0) {
                if (data->len > 0) held_n--;
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
@@ -3599,7 +3627,7 @@ index 5f8a2fa2..5b823a8d 100644
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
       * fixed positions. Rubber Ducky drives its camera from the sticks and never
-@@ -1093,7 +2070,7 @@ skip_inject: ;
+@@ -1093,7 +2072,7 @@ skip_inject: ;
                   sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
                   s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
                   s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
@@ -3608,7 +3636,7 @@ index 5f8a2fa2..5b823a8d 100644
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
-@@ -1104,7 +2081,7 @@ skip_inject: ;
+@@ -1104,7 +2083,7 @@ skip_inject: ;
        { static int sw = -1; static clock_t t0 = 0;
          if (sw < 0) { const char* e = getenv("PAD_SWEEP");
                        sw = e ? atoi(e) : 0; if (sw < 0) sw = 0; }
@@ -3617,7 +3645,7 @@ index 5f8a2fa2..5b823a8d 100644
              static const unsigned char steps[9][4] = {
                  {128,128,128,128},
                  {128,  0,128,128}, {128,255,128,128},
-@@ -1172,10 +2149,40 @@ skip_inject: ;
+@@ -1172,10 +2151,40 @@ skip_inject: ;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Y] = 399; /* gravity */
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Z] = 512;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_G] = 512;
@@ -3658,7 +3686,7 @@ index 5f8a2fa2..5b823a8d 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -1496,9 +2503,64 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1496,9 +2505,64 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  #endif
  
  #if PAD_BACKEND_SDL2
@@ -19743,7 +19771,7 @@ index ba6c18eb..d8a38074 100644
          "    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n"
          "    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n"
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index f78c66f2..0b3ecbe0 100644
+index f78c66f2..b7dd709e 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -24451,7 +24479,7 @@ index f78c66f2..0b3ecbe0 100644
          if (!(s_e2.warned & 1u)) { VK_LOG("engine: colour format %d not supported yet\n", (int)rt_fmt); s_e2.warned |= 1u; }
          return 0;
      }
-@@ -3158,183 +5153,689 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+@@ -3158,183 +5153,688 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
      u32 slot = VK_ENG_MAX_PIPE;
      for (u32 i = 0; i < VK_ENG_MAX_PIPE; i++) if (!s_epipe[i].used) { slot = i; break; }
      if (slot == VK_ENG_MAX_PIPE) {
@@ -25091,7 +25119,10 @@ index f78c66f2..0b3ecbe0 100644
 +    }
 +    SDL_LockMutex(s_ap.mu);
 +    const int ok = s_ap.tail - s_ap.head < VK_AP_QUEUE;
-+    if (ok) { SDL_AtomicAdd(&s_ap.active, 1);
++    if (ok) { vk_eng_pipe* P = &s_epipe[pipe_index];
++              P->skipped[t] = 1; P->build_ms[t] = 0;
++              SDL_AtomicSet(&P->pend[t], 1);
++              SDL_AtomicAdd(&s_ap.active, 1);
 +              s_ap.q[s_ap.tail % VK_AP_QUEUE].pipe = pipe_index; s_ap.q[s_ap.tail % VK_AP_QUEUE].topo = t;
 +              s_ap.q[s_ap.tail % VK_AP_QUEUE].rp = rp; s_ap.tail++; SDL_CondSignal(s_ap.cv); }
 +    SDL_UnlockMutex(s_ap.mu);
@@ -25202,8 +25233,6 @@ index f78c66f2..0b3ecbe0 100644
 +     * stall behind a 164 ms compile). The new one joins the queue; a cached
 +     * one is made there within a frame or two. */
 +    if (s_vk_pcc && s_ap.th && SDL_AtomicGet(&s_ap.active) > 0 && vk_ap_queue((u32)(P - s_epipe), topo_idx, rp)) {
-+        P->skipped[topo_idx] = 1; P->build_ms[topo_idx] = 0;
-+        SDL_AtomicSet(&P->pend[topo_idx], 1);
 +        return VK_NULL_HANDLE;
      }
 -    /* nv40 COLOR_MASK: B [0:7], G [8:15], R [16:23], A [24:31], any bit set.
@@ -25259,8 +25288,6 @@ index f78c66f2..0b3ecbe0 100644
 -            }
 +        P->variant[topo_idx] = VK_NULL_HANDLE;
 +        if (rc == VK_PIPELINE_COMPILE_REQUIRED_EXT && vk_ap_queue((u32)(P - s_epipe), topo_idx, rp)) {
-+            P->skipped[topo_idx] = 1; P->build_ms[topo_idx] = 0;
-+            SDL_AtomicSet(&P->pend[topo_idx], 1);
 +            return VK_NULL_HANDLE;
          }
 -        cba[r] = (VkPipelineColorBlendAttachmentState){
@@ -25300,7 +25327,7 @@ index f78c66f2..0b3ecbe0 100644
      }
      return P->variant[topo_idx];
  }
-@@ -3343,59 +5844,67 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
+@@ -3343,59 +5843,67 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
  
  static void vk_eng2_shutdown(void* user)
  {
@@ -25391,7 +25418,7 @@ index f78c66f2..0b3ecbe0 100644
      }
      s_e2.tex_mask = mask;
  }
-@@ -3416,20 +5925,10 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
+@@ -3416,20 +5924,10 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
      s_e2.sc[0] = x; s_e2.sc[1] = y; s_e2.sc[2] = w; s_e2.sc[3] = h; s_e2.have_sc = 1;
  }
  static void vk_eng_set_stencil_ref(void* user, u32 ref) { (void)user; s_e2.stencil_ref = ref; }
@@ -25415,7 +25442,7 @@ index f78c66f2..0b3ecbe0 100644
  }
  
  static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, VkImageView dview,
-@@ -3448,7 +5947,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
+@@ -3448,7 +5946,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
                                      .renderPass = rp, .attachmentCount = n + 1, .pAttachments = views,
                                      .width = w, .height = h, .layers = 1 };
      VkFramebuffer fb = VK_NULL_HANDLE;
@@ -25424,7 +25451,7 @@ index f78c66f2..0b3ecbe0 100644
      memcpy(s_e2.fb[s_e2.fb_count].key, key, sizeof key);
      s_e2.fb[s_e2.fb_count++].fb = fb;
      return fb;
-@@ -3462,19 +5961,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
+@@ -3462,19 +5960,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
          return s_e2.scratch_depth.view;
      vk_eng_drop_framebuffers();
      vk_destroy_image(&s_e2.scratch_depth);
@@ -25530,7 +25557,7 @@ index f78c66f2..0b3ecbe0 100644
  static int vk_eng_ensure_indices(VkDeviceSize bytes)
  {
      if (s_e2.indices.buf && s_e2.indices.size >= bytes) return 0;
-@@ -3495,383 +6076,600 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
+@@ -3495,383 +6075,600 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
                    | ((u64)d->mip_present << 3) | ((u64)(d->wrap_s & 0xF) << 4)
                    | ((u64)(d->wrap_t & 0xF) << 8) | ((u64)(d->wrap_r & 0xF) << 12)
                    | ((u64)(lo >> 16) << 16) | ((u64)(hi >> 16) << 32);
@@ -26428,7 +26455,7 @@ index f78c66f2..0b3ecbe0 100644
  }
  
  static const rsx_draw_backend s_vk_engine_backend = {
-@@ -3881,14 +6679,20 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -3881,14 +6678,20 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .submit_and_wait      = vk_eng_submit_and_wait,
      .texture_create       = vk_eng_texture_create,
      .texture_upload       = vk_eng_texture_upload,
@@ -26452,7 +26479,7 @@ index f78c66f2..0b3ecbe0 100644
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
      .bind_targets         = vk_eng_bind_targets,
-@@ -3900,17 +6704,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -3900,17 +6703,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .set_viewport         = vk_eng_set_viewport,
      .set_scissor          = vk_eng_set_scissor,
      .set_stencil_ref      = vk_eng_set_stencil_ref,
@@ -26472,7 +26499,7 @@ index f78c66f2..0b3ecbe0 100644
  };
  
  static rsx_backend s_vulkan_backend = {
-@@ -3930,19 +6730,37 @@ static rsx_backend s_vulkan_backend = {
+@@ -3930,19 +6729,37 @@ static rsx_backend s_vulkan_backend = {
   * -------------------------------------------------------------------------*/
  static int vk_init_all(u32 width, u32 height, const char* title)
  {
@@ -26517,7 +26544,7 @@ index f78c66f2..0b3ecbe0 100644
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                .pApplicationName = "ps3recomp", .pEngineName = "ps3recomp RSX",
-@@ -3953,11 +6771,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3953,11 +6770,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          ci.enabledExtensionCount   = s_vk.inst_ext_count;
          ci.ppEnabledExtensionNames = s_vk.inst_exts;
      }
@@ -26553,7 +26580,7 @@ index f78c66f2..0b3ecbe0 100644
          ir = pvkCreateInstance(&ci, NULL, &s_vk.instance);
      }
      if (ir != VK_SUCCESS) { VK_LOG("vkCreateInstance failed (VkResult %d)\n", (int)ir); return -1; }
-@@ -3976,40 +6818,100 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3976,40 +6817,100 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          vk_window_drop("no device can present to the window");
          if (vk_pick_device()) return -1;
      }
@@ -26671,7 +26698,7 @@ index f78c66f2..0b3ecbe0 100644
      if (vk_load_device_functions()) return -1;
      if (s_vk.windowed && vk_load_wsi_device_functions())
          vk_window_drop("the driver has no swapchain functions");
-@@ -4026,20 +6928,18 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -4026,20 +6927,18 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      VK_CHECK(pvkAllocateCommandBuffers(s_vk.device, &cai, &s_vk.cmd), "vkAllocateCommandBuffers");
      VkFenceCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
      VK_CHECK(pvkCreateFence(s_vk.device, &fci, NULL, &s_vk.fence), "vkCreateFence");
@@ -26698,7 +26725,7 @@ index f78c66f2..0b3ecbe0 100644
      if (vk_create_host_buffer(&s_vk.readback, (VkDeviceSize)s_vk.width * s_vk.height * 4u,
                                VK_BUFFER_USAGE_TRANSFER_DST_BIT)) return -1;
      if (vk_create_render_pass()) return -1;
-@@ -4056,11 +6956,11 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -4056,11 +6955,11 @@ static int vk_init_all(u32 width, u32 height, const char* title)
       * null backend makes the same choice). */
      if (vk_begin()) return -1;
      vk_barrier_image(s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
@@ -26712,7 +26739,7 @@ index f78c66f2..0b3ecbe0 100644
      pvkCmdClearColorImage(s_vk.cmd, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL, &black, 1, &cr);
      pvkCmdClearDepthStencilImage(s_vk.cmd, s_vk.depth.img, VK_IMAGE_LAYOUT_GENERAL, &far_plane, 1, &dr);
      if (vk_submit_and_wait()) return -1;
-@@ -4090,13 +6990,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -4090,13 +6989,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
       * pipeline from the guest's programs, so without them it has nothing to
       * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
@@ -26729,7 +26756,7 @@ index f78c66f2..0b3ecbe0 100644
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
             s_vk.width, s_vk.height, (int)s_vk.depth_format, title ? title : "");
      return 0;
-@@ -4104,7 +7005,6 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -4104,7 +7004,6 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
  
  void rsx_vulkan_backend_shutdown(void)
  {
@@ -26737,7 +26764,7 @@ index f78c66f2..0b3ecbe0 100644
      if (rsx_get_backend() == &s_vulkan_backend) rsx_set_backend(NULL);
      if (s_vk.eng_active) { rsx_draw_engine_shutdown(); s_vk.eng_active = 0; }
      rsx_draw_engine_set_backend(NULL);
-@@ -4119,7 +7019,9 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -4119,7 +7018,9 @@ void rsx_vulkan_backend_shutdown(void)
      }
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
@@ -26748,7 +26775,7 @@ index f78c66f2..0b3ecbe0 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -4139,18 +7041,14 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -4139,18 +7040,14 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -26768,7 +26795,7 @@ index f78c66f2..0b3ecbe0 100644
      memset(&s_vk, 0, sizeof s_vk);
  }
  
-@@ -4159,52 +7057,18 @@ int rsx_vulkan_backend_pump_messages(void)
+@@ -4159,52 +7056,18 @@ int rsx_vulkan_backend_pump_messages(void)
      if (!s_vk.windowed) return 0;
      int quit = 0;
      SDL_Event e;
@@ -26823,7 +26850,7 @@ index f78c66f2..0b3ecbe0 100644
  }
  
  u32 rsx_vulkan_backend_debug_color(void) { return s_vk.clear_argb; }
-@@ -4220,9 +7084,14 @@ u32 rsx_vulkan_backend_guest_draws(void)
+@@ -4220,9 +7083,14 @@ u32 rsx_vulkan_backend_guest_draws(void)
      return s_vk.eng_active ? rsx_draw_engine_guest_draws() : s_g.last_draws;
  }
  
@@ -27759,10 +27786,10 @@ index 11a74804..2251ce0b 100644
      for (unsigned i = 0; i < 8 * sizeof mask && i < CPU_SETSIZE; i++)
          if (mask & ((DWORD_PTR)1 << i)) CPU_SET(i, &set);
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index 37e37454..c257dfd8 100644
+index 37e37454..33fda39f 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
-@@ -19,6 +19,13 @@
+@@ -19,8 +19,16 @@
  #include "ps3emu/nid.h"      /* ps3_compute_nid */
  #include "ps3emu/guest_call.h" /* ps3_invoke_guest: AIO completion is a guest OPD */
  #include "sdata_decrypt.h"   /* SDATA/EDAT (NPD) decryption for cellFsSdataOpen */
@@ -27775,8 +27802,11 @@ index 37e37454..c257dfd8 100644
 +#include <vector>
  #include <stdint.h>
  #include <stdio.h>
++extern "C" void racit_menu_archive_path(char* path, size_t capacity, int read_only);
  #include <string.h>
-@@ -209,13 +216,65 @@ static void host_path(char* out, size_t cap, const char* guest)
+ #include <stdlib.h>
+ #include <errno.h>
+@@ -209,13 +217,65 @@ static void host_path(char* out, size_t cap, const char* guest)
      snprintf(out, cap, "%s/%s", ppu_vfs_root, rel);
      for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
      ps3_vfs_ps3game_fallback(out, cap);
@@ -27843,7 +27873,16 @@ index 37e37454..c257dfd8 100644
  static DIR*  g_dirs[FS_MAX];
  /* Last transfer direction on each fd's stream: 0 none, 1 read, 2 write.
   *
-@@ -308,9 +367,20 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -276,6 +336,8 @@ static void cellFsOpen(ppu_context* ctx)
+     uint32_t flags  = (uint32_t)ctx->gpr[4];
+     uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
+     host_path(hpath, sizeof hpath, gpath);
++    racit_menu_archive_path(hpath, sizeof hpath,
++        (flags & (3u | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND)) == CELL_FS_O_RDONLY);
+ 
+     /* NPDRM: see the note in sys_fs.c -- an EDAT is decrypted once into a cache
+      * file and that is opened in its place. */
+@@ -308,9 +370,20 @@ static void cellFsOpen(ppu_context* ctx)
              return;
          }
      }
@@ -27864,7 +27903,7 @@ index 37e37454..c257dfd8 100644
          ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
      }
      const char* fmode = (acc == CELL_FS_O_RDWR)
-@@ -332,6 +402,9 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -332,6 +405,9 @@ static void cellFsOpen(ppu_context* ctx)
       * movies) is diagnosed from the opener: its sibling read path is the one
       * that is not running. */
      if (fd >= 0 && fd < FS_MAX) { strncpy(g_fd_path[fd], gpath, sizeof g_fd_path[fd]-1); g_fd_path[fd][sizeof g_fd_path[fd]-1]=0; }
@@ -27874,7 +27913,7 @@ index 37e37454..c257dfd8 100644
      { char who[64] = "?";
        if (ps3_env_once("FS_CALLER")) { ppu_guest_caller(who, sizeof who);
            fprintf(stderr, "[fs] open '%s' -> fd %d  (opened by %s)\n", gpath, fd, who);
-@@ -480,6 +553,362 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
+@@ -480,6 +556,362 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
      p[len - 1] = p[len - 1];
  }
  
@@ -28237,7 +28276,7 @@ index 37e37454..c257dfd8 100644
  static void cellFsRead(ppu_context* ctx)
  {
      int fd          = (int)(uint32_t)ctx->gpr[3];
-@@ -490,10 +919,74 @@ static void cellFsRead(ppu_context* ctx)
+@@ -490,10 +922,74 @@ static void cellFsRead(ppu_context* ctx)
      if (!f) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EBADF; return; }
      uint64_t raw_nbytes = ctx->gpr[5];
      long fpos_before = ftell(f);
@@ -28312,7 +28351,7 @@ index 37e37454..c257dfd8 100644
      /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
       * The intro cinematic is 28 seconds and this port renders it at a few frames
       * a second, so it cannot be watched to its end -- truncating the stream makes
-@@ -657,6 +1150,7 @@ static void cellFsLseek(ppu_context* ctx)
+@@ -657,6 +1153,7 @@ static void cellFsLseek(ppu_context* ctx)
          ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EINVAL; return;
      }
      int64_t p = FS_TELL64(f);
@@ -32587,13 +32626,24 @@ index 9041b409..f2628c56 100644
      if (timeout > ((1ull << 48) - 1)) timeout = (1ull << 48) - 1;
  #ifdef _WIN32
 diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
-index e435555a..4847cc42 100644
+index e435555a..019277cb 100644
 --- a/runtime/syscalls/sys_fs.c
 +++ b/runtime/syscalls/sys_fs.c
-@@ -342,6 +342,19 @@ int64_t sys_fs_open(ppu_context* ctx)
+@@ -8,6 +8,7 @@
+ #include "../platform/ps3_dev_flash.h"
+ #include <string.h>
+ #include <stdio.h>
++extern void racit_menu_archive_path(char* path, size_t capacity, int read_only);
+ #include <stdlib.h>
+ #include <errno.h>
+ #include <sys/types.h>
+@@ -341,6 +342,21 @@ int64_t sys_fs_open(ppu_context* ctx)
+     const char* ps3_path = (const char*)vm_to_host(path_addr);
      char host_path[1024];
      sys_fs_translate_path(ps3_path, host_path, sizeof(host_path));
- 
++    racit_menu_archive_path(host_path, sizeof host_path,
++        (flags & (CELL_FS_O_ACCMODE | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND)) == CELL_FS_O_RDONLY);
++
 +    /* racacit: RACACIT_SKIP_MOVIES=1 -- every pre-rendered (Bink) movie is
 +     * skipped: report the .bik as absent and the title plays on exactly as it
 +     * does when a movie file is missing from the disc. Movies open through
@@ -32606,10 +32656,9 @@ index e435555a..4847cc42 100644
 +          fprintf(stderr, "[movies] skipping %s (RACACIT_SKIP_MOVIES)\n", ps3_path);
 +          return (int64_t)(int32_t)CELL_ENOENT;
 +      } }
-+
+ 
      { extern char* getenv(const char*); if (getenv("FLOW_TITLEOPEN") && ps3_path && strstr(ps3_path, "Titles")) {
          size_t _l = strlen(ps3_path);
-         fprintf(stderr, "[TITLEOPEN] path='%s' (len=%zu, ends_slash=%d) guest_lr=0x%08X\n",
 diff --git a/runtime/syscalls/sys_memory.c b/runtime/syscalls/sys_memory.c
 index 9d112f64..1b646004 100644
 --- a/runtime/syscalls/sys_memory.c
