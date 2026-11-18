@@ -818,6 +818,61 @@ def patch_file(path):
         else:
             sys.exit('patch_lift #20: func_004C46FC: row bound or mask join not found once. The function is in this lift but not the code update 1.20\'s port expects (another disc?): stopping rather than building without the fix.')
 
+    # 21. The disc build's hooks that until now existed only as hand edits of
+    #     mac-perf's lift (game/stubs.cpp has the functions), so a fresh lift
+    #     lost them and the hook check stopped the build:
+    #     - func_0032C7A4: the level memory budget update 1.20 raised (the
+    #       disc's lis 0x74 into r0 and r19), racacit_u120_level_budget, and
+    #       the budget log at loc_0032CDB4;
+    #     - func_0047B7E8: update 1.20's mission bits resync before it returns;
+    #     - func_00661650: the sync-mode log on entry.
+    #     Both the v0.13 and the v0.19 lifter spellings of the lis are accepted.
+    def decl(src_, proto):
+        if proto in src_:
+            return src_
+        i = src_.index('\n', src_.index('#include')) + 1
+        return src_[:i] + 'extern "C" ' + proto + '\n' + src_[i:]
+    sp = func_span(src, 'func_0032C7A4')
+    if sp and 'racacit_u120_level_budget' not in src[sp[0]:sp[2]]:
+        a_, body_, end_ = sp
+        fn = src[a_:end_]
+        lis = r'\(int64_t\)\(int32_t\)\((?:\(uint32_t\)0x74 << 16|0x740000|7602176)\);\n'
+        pat = re.compile(r'(\nloc_0032CD68:\n        ctx->gpr\[3\] = ppc_rldicl\(ctx->gpr\[7\], 0, 32\);\n)'
+                         r'        ctx->gpr\[0\] = ' + lis + r'        ctx->gpr\[19\] = ' + lis)
+        tail = '\nloc_0032CDB4:\n'
+        if len(pat.findall(fn)) == 1 and fn.count(tail) == 1:
+            fn = pat.sub(lambda m: m.group(1) +
+                         '        { const uint32_t b_ = racacit_u120_level_budget(ctx);   /* racacit: 1.20 level budget (was 0x740000) */\n'
+                         '          ctx->gpr[0] = (int64_t)(int32_t)b_; ctx->gpr[19] = (int64_t)(int32_t)b_; }\n', fn, count=1)
+            fn = fn.replace(tail, tail + '        racacit_u120_budget_log(ctx);   /* LOCAL diagnostic */\n', 1)
+            src = src[:a_] + fn + src[end_:]
+            src = decl(src, 'uint32_t racacit_u120_level_budget(ppu_context* ctx);')
+            src = decl(src, 'void racacit_u120_budget_log(ppu_context* ctx);')
+            changed = True
+        else:
+            sys.exit('patch_lift #21: func_0032C7A4: the level budget (lis 0x74 into r0 and r19) or loc_0032CDB4 not found once: stopping rather than building without the 1.20 budget.')
+    sp = func_span(src, 'func_0047B7E8')
+    if sp and 'racacit_u120_space_bits' not in src[sp[0]:sp[2]]:
+        a_, body_, end_ = sp
+        fn = src[a_:end_]
+        ret = '        ctx->gpr[1] = ctx->gpr[1] + (int64_t)(0x90);\n        return;'
+        if fn.count('return;') == 1 and fn.endswith(ret):
+            fn = fn[:-len('        return;')] + '        racacit_u120_space_bits(ctx);   /* racacit: 1.20 mission bits resync */\n        return;'
+            src = src[:a_] + fn + src[end_:]
+            src = decl(src, 'void racacit_u120_space_bits(ppu_context* ctx);')
+            changed = True
+        else:
+            sys.exit('patch_lift #21: func_0047B7E8: the single epilogue return not found: stopping rather than building without the 1.20 mission bits resync.')
+    sp = func_span(src, 'func_00661650')
+    if sp and 'racacit_sync_mode' not in src[sp[0]:sp[2]]:
+        a_, body_, end_ = sp
+        at = body_
+        if src.startswith('    PPU_MM_SNAP\n', at):
+            at += len('    PPU_MM_SNAP\n')
+        src = src[:at] + '        racacit_sync_mode(ctx);   /* racacit: sync-mode log (diagnostic) */\n' + src[at:]
+        src = decl(src, 'void racacit_sync_mode(ppu_context* ctx);')
+        changed = True
+
     if changed:
         open(path, 'w').write(src)
     return changed
