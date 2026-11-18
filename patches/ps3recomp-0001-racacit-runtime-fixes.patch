@@ -33307,6 +33307,19 @@ index f3d4163a..3ef96645 100644
  #ifdef _WIN32
  /* Sub-millisecond timed-wait support for the lv2 sync primitives.
   * SleepConditionVariableCS / WaitForSingleObject floor a timed wait to 1 ms,
+diff --git a/tools/extract_spu_images.py b/tools/extract_spu_images.py
+index 0c15cb73..11dd4030 100644
+--- a/tools/extract_spu_images.py
++++ b/tools/extract_spu_images.py
+@@ -28,6 +28,8 @@ ELF_MAGIC = b"\x7FELF"
+ EM_SPU    = 23
+ 
+ 
++# Pipelines run tools with python -I, which leaves the script's own directory off sys.path.
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ from spu_elf import InvalidSPUELF, scan_spu_candidates, validate_spu_elf
+ 
+ 
 diff --git a/tools/gen_hle_nids.py b/tools/gen_hle_nids.py
 index ac13929c..92523210 100644
 --- a/tools/gen_hle_nids.py
