@@ -32598,7 +32598,7 @@ index e435555a..4847cc42 100644
          size_t _l = strlen(ps3_path);
          fprintf(stderr, "[TITLEOPEN] path='%s' (len=%zu, ends_slash=%d) guest_lr=0x%08X\n",
 diff --git a/runtime/syscalls/sys_memory.c b/runtime/syscalls/sys_memory.c
-index 9d112f64..5b2f91ca 100644
+index 9d112f64..1b646004 100644
 --- a/runtime/syscalls/sys_memory.c
 +++ b/runtime/syscalls/sys_memory.c
 @@ -2,6 +2,7 @@
@@ -32609,7 +32609,22 @@ index 9d112f64..5b2f91ca 100644
  #include "sys_memory.h"
  #include <stdio.h>
  #include <string.h>
-@@ -138,7 +139,13 @@ static int64_t memory_allocate(uint64_t requested, uint32_t flags, uint32_t cid,
+@@ -29,7 +30,13 @@ uint32_t g_sys_mem_bump_ptr = 0;
+ #define SYS_MEM_ALLOC_END   0x20000000u
+ #define SYS_MAPPER_BASE     0x40000000u
+ #define SYS_MAPPER_END      0xC0000000u
+-static uint32_t s_mapper_bump_ptr = SYS_MAPPER_BASE;
++/* Where sys_mmapper_allocate_address starts handing out regions. A port that
++ * knows its title's memory map may move it before any guest code runs, like
++ * ppu_hle_inject_base (RACiT: the title's 256 MB heap reservation has always
++ * landed at 0x20000000, and its write-watch ranges and memory scans expect it
++ * there). 0 in the cursor means "not yet used: start here". */
++uint32_t sys_mapper_base = SYS_MAPPER_BASE;
++static uint32_t s_mapper_bump_ptr = 0;
+ typedef struct mapper_reservation {
+     uint32_t start, end, next;
+ } mapper_reservation;
+@@ -138,7 +145,13 @@ static int64_t memory_allocate(uint64_t requested, uint32_t flags, uint32_t cid,
      if (ct) ct->used_size += size;
      if (addr + size > g_sys_mem_bump_ptr) g_sys_mem_bump_ptr = addr + size;
      bump_unlock();
@@ -32624,7 +32639,7 @@ index 9d112f64..5b2f91ca 100644
      if (addr_out) write_be32(addr_out, addr);
      return CELL_OK;
  }
-@@ -176,6 +183,8 @@ int64_t sys_memory_allocate_from_container(ppu_context* ctx)
+@@ -176,6 +189,8 @@ int64_t sys_memory_allocate_from_container(ppu_context* ctx)
  int64_t sys_memory_free(ppu_context* ctx)
  {
      uint32_t addr = LV2_ARG_U32(ctx, 0);
@@ -32633,6 +32648,37 @@ index 9d112f64..5b2f91ca 100644
      bump_lock();
      for (int i = 0; i < SYS_MEMORY_ALLOC_MAX; i++) {
          if (g_sys_mem_allocs[i].active && g_sys_mem_allocs[i].addr == addr) {
+@@ -361,7 +376,7 @@ static uint32_t mapper_address(uint64_t requested, uint64_t alignment)
+ {
+     if (!requested || requested > UINT32_MAX || !alignment ||
+         alignment > UINT32_MAX || (alignment & (alignment - 1u))) return 0;
+-    uint64_t addr = ((uint64_t)s_mapper_bump_ptr + alignment - 1u) & ~(alignment - 1u);
++    uint64_t addr = ((uint64_t)(s_mapper_bump_ptr ? s_mapper_bump_ptr : sys_mapper_base) + alignment - 1u) & ~(alignment - 1u);
+     uint64_t size = (requested + alignment - 1u) & ~(alignment - 1u);
+     /* A reservation owns its entire aligned span. Recheck after every skip:
+      * an alignment adjustment can move it into another runtime-owned window. */
+@@ -586,7 +601,7 @@ void sys_memory_init(lv2_syscall_table* tbl)
+     memset(g_sys_mmapper_shared, 0, sizeof(g_sys_mmapper_shared));
+     g_sys_mem_bump_ptr = 0;
+     s_total_allocated  = 0;
+-    s_mapper_bump_ptr = SYS_MAPPER_BASE;
++    s_mapper_bump_ptr = 0;
+     memset(s_mapper_reservations, 0, sizeof(s_mapper_reservations));
+     bump_unlock();
+ 
+diff --git a/runtime/syscalls/sys_memory.h b/runtime/syscalls/sys_memory.h
+index f394a033..b3dd696f 100644
+--- a/runtime/syscalls/sys_memory.h
++++ b/runtime/syscalls/sys_memory.h
+@@ -64,6 +64,8 @@ int64_t sys_memory_container_create(ppu_context* ctx);
+ int64_t sys_memory_container_destroy(ppu_context* ctx);
+ int64_t sys_memory_container_get_size(ppu_context* ctx);
+ int64_t sys_memory_allocate_from_container(ppu_context* ctx);
++/* First address sys_mmapper_allocate_address hands out (default 0x40000000). */
++extern uint32_t sys_mapper_base;
+ int64_t sys_mmapper_allocate_address(ppu_context* ctx);
+ int64_t sys_mmapper_search_map_address(uint32_t start, uint32_t size, uint32_t* out);
+ int64_t sys_mmapper_free_address(ppu_context* ctx);
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
 index b997931b..3d048c2f 100644
 --- a/runtime/syscalls/sys_ppu_thread.c
