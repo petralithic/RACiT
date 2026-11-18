@@ -8931,7 +8931,7 @@ index c4e4d849..0ed12868 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 19548e0a..91c34a15 100644
+index 19548e0a..a4f5ae47 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -11,6 +11,7 @@
@@ -10156,12 +10156,12 @@ index 19548e0a..91c34a15 100644
 + * and effect pass after it; over open sky (depth 1.0) the copy said 0, and
 + * all of them failed their depth test there: the Aphelion's blaster bolts
 + * were invisible until they flew in front of something. */
++/* This full-screen quad carries only ATTR0; no colour/texcoord inputs. */
++static const char* const kEngDepthAsColorVS =
++"float4 main(float4 a0 : ATTR0) : SV_Position { return a0; }\n";
 +static const char* const kEngDepthAsColorPS =
 +"struct PSInput {\n"
-+"    float4 position : SV_POSITION; float4 col0 : COLOR0; float4 col1 : COLOR1;\n"
-+"    float4 fog : FOG;\n"
-+"    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
-+"    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n"
++"    float4 position : SV_POSITION;\n"
 +"};\n"
 +"Texture2D    rsx_tex[16] : register(t0);\n"
 +"SamplerState rsx_samp[16] : register(s0);\n"
@@ -10214,7 +10214,7 @@ index 19548e0a..91c34a15 100644
 +    memset(&rs, 0, sizeof rs);
 +    rs.color_mask = 0x01010101u;
 +    if (!s_d2c_pipe) {
-+        s_d2c_pipe = g.be->pipeline_create(g.be->user, kEngFixedVS, kEngDepthAsColorPS, &rs, &lp,
++        s_d2c_pipe = g.be->pipeline_create(g.be->user, kEngDepthAsColorVS, kEngDepthAsColorPS, &rs, &lp,
 +                                           lp.stride, RSX_BE_FMT_R8G8B8A8, 1u);
 +        if (!s_d2c_pipe) {
 +            s_d2c_pipe = ENG_INVALID;
@@ -11029,7 +11029,7 @@ index 19548e0a..91c34a15 100644
  /* SET_TEXTURE_FILTER's min field is [18:16] (1 NEAREST, 2 LINEAR, then 3..6,
   * the four combinations of a nearest/linear minification with a
   * nearest/linear mip filter) and mag [26:24]; SET_TEXTURE_CONTROL0 carries
-@@ -1844,13 +3117,128 @@ static u32 eng_volume_mask(void)
+@@ -1844,17 +3117,132 @@ static u32 eng_volume_mask(void)
      return mask;
  }
  
@@ -11055,6 +11055,10 @@ index 19548e0a..91c34a15 100644
          rsx_dsp_texture t;
          rsx_dsp_get_texture(&g.rsx, u, &t);
 -        /* A cube face is square by construction, so a non-square image
+-         * cannot be one; the fragment program is compiled against this mask
+-         * and a texturecube slot filled with a 2D texture is a validation
+-         * failure, not a wrong pixel. */
+-        if (t.enabled && t.cubemap && t.width && t.width == t.height)
 +        if (!t.enabled || !eng_is_depth_fmt(t.format)) continue;
 +        const u32 zf = (t.wrap >> 28) & 7u;
 +        if (!zf) continue;
@@ -11158,9 +11162,13 @@ index 19548e0a..91c34a15 100644
 +        rsx_dsp_texture t;
 +        rsx_dsp_get_texture(&g.rsx, u, &t);
 +        /* A cube face is square by construction, so a non-square image
-          * cannot be one; the fragment program is compiled against this mask
-          * and a texturecube slot filled with a 2D texture is a validation
-          * failure, not a wrong pixel. */
++         * cannot be one; the fragment program is compiled against this mask
++         * and a texturecube slot filled with a 2D texture is a validation
++         * failure, not a wrong pixel. */
++        if (t.enabled && t.cubemap && t.width && t.width == t.height)
+             mask |= 1u << u;
+     }
+     return mask;
 @@ -1864,6 +3252,10 @@ static u32 eng_cube_mask(void)
   * layout and by the pipeline, because they must not disagree: the built-in
   * program declares all sixteen inputs, so narrowing the layout for it would
@@ -11634,8 +11642,7 @@ index 19548e0a..91c34a15 100644
 +                                          (const u32 (*)[3])dim3, cube_mask, vol_mask) < 0)
 +                fi = -1;
 +        }
-     }
--    if (vi > 0 && fi > 0)
++    }
 +    /* RSX_FP_DEBUG_KEY=<hex pipeline key>: that pipeline's fragment program
 +     * returns its inputs instead of its colour, in 24-pixel screen stripes:
 +     * TEXCOORD1.xy (fract), unit 0 sampled there (rgb), COLOR0.rgb, and
@@ -11680,7 +11687,8 @@ index 19548e0a..91c34a15 100644
 +                 while (s_nskip < 512 && fgets(ln, sizeof ln, f)) {
 +                     u64 k = strtoull(ln, 0, 16); if (k) s_skip[s_nskip++] = k; }
 +                 fclose(f); }
-+    }
+     }
+-    if (vi > 0 && fi > 0)
 +    int key_drop = 0;
 +    for (int i = 0; i < s_nskip; i++) if (s_skip[i] == key) { key_drop = 1; break; }
 +    const int dbg_drop = (s_plimit >= 0 && (long)g.n_pipelines >= s_plimit) ||
