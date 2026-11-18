@@ -1,8 +1,7 @@
 # Draft: move the runtime to ps3recomp v0.19.0
 
-**Status: not ready.** Both versions build, boot and reach the main menu
-offscreen, but loading Zolar Forest from slot 2 never finishes on either one.
-Don't open a PR until that's fixed.
+**Status:** both versions build, load Zolar Forest from slot 2 and pass the
+150 s rehearsal offscreen. FPS against mac-perf is in `docs/mac-perf-log.md`.
 
 ## What moved
 
@@ -10,7 +9,7 @@ Don't open a PR until that's fixed.
   README/CONTRIBUTORS). Both setup scripts point at the new pin.
 - **Runtime patch:** regenerated with the BUILDING.md recipe as
   `git diff --ignore-cr-at-eol de4f0903 racit/v019 | tr -d '\r'`. It applies to
-  `de4f0903` with `--ignore-whitespace`. It contains four commits from
+  `de4f0903` with `--ignore-whitespace`. It contains five commits from
   petralithic/ps3recomp `racit/v019`:
   1. Our old patch file, rebased onto v0.19. That took 593 conflict hunks in
      52 files.
@@ -20,6 +19,8 @@ Don't open a PR until that's fixed.
      The committed `perf/mac-rsx-walker` can't lift its SPU jobs without it.
   3. `extract_spu_images.py` now runs under `python -I`.
   4. `sys_mapper_base`: a port can choose where mapper regions start.
+  5. Immediate-mode draws go only through upstream's `immediate_vertex`
+     hook (the load-hang fix, below).
 - **`patch_lift.py`:** the frame-gate anchor now accepts the v0.19 lifter's
   CR test (`>> 25) & 1`) and `ppc_rlw64`.
 - **`versions/BCUS98124-1.20-hooks.json`:** all 109 hooks were re-anchored on
@@ -59,31 +60,27 @@ Don't open a PR until that's fixed.
 
 ## Tested
 
-| Version | Build | Main menu offscreen | Zolar Forest from slot 2 |
-| --- | --- | --- | --- |
-| 1.00 | passes | yes | stuck on LOADING (over 5 min, 60 fps loading screen) |
-| 1.20 | passes | yes | stuck on LOADING (170 s) |
+| Version | Build | Main menu offscreen | Zolar Forest from slot 2 | 150 s rehearsal |
+| --- | --- | --- | --- | --- |
+| 1.00 | passes | yes | loads | passes, saves unchanged |
+| 1.20 | passes | yes | loads | passes, saves unchanged |
 
-- The mac-perf build `b7d4b9a` loads Zolar Forest in under 2.5 minutes on
-  the same route, and the rehearsal passes.
-- Owner saves were unchanged on every run.
+Hooks in both lifts match mac-perf (`racit_camera_take` in 1 / 20 files,
+`racit_publish_menu_keyboard` and `racacit_front_end_cards` in 1 each).
 
-## The open blocker
+## The load hang (fixed)
 
-During the hang:
+It wasn't SPURS. The level did load: the game ran its level frames behind the
+LOADING screen but never drew the post-process chain or the final composite
+into the display buffers, so the last loading image stayed up.
 
-- The main thread is still running frames, and the SPURS workers are running
-  WWS and igPm jobs.
-- No PPU thread is stuck in a syscall.
+Those passes are immediate-mode quads. Our merge kept RACiT's immediate-mode
+emulation (vertices gathered into an inline stream at END) next to upstream's
+new `immediate_vertex` sink. Every immediate draw then reached the draw engine
+as both immediate and inline geometry, and `sink_end` drops mixed groups. The
+fix runs the emulation only for a sink without the hook. It's a bug in our
+merge, not in upstream, so it isn't an upstream PR candidate.
 
-Restoring our old SPURS kernel on top of v0.19 (branch
-`racit/v019-spurs-ours`) crashes at the first WWS policy-module DMA, because
-it no longer matches the merged SPU runtime.
-
-Next steps:
-
-- Diff the SPURS job and event-flag traffic against the mac-perf build during
-  the load.
-- Or port our lane and WakeUp semantics onto upstream's kernel.
-
-FPS has not been measured.
+Found by tracing targets per frame (`RSX_ENG_TRACE_TARGETS=1`) on both builds:
+v0.19 frames stopped after the 960x704 lighting pass, mac-perf ones went on
+through bloom, luminance and two draws into the display buffer.
