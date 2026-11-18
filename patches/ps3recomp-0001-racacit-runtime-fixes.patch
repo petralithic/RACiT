@@ -33533,7 +33533,7 @@ index 931d3b34..f34b2553 100644
 +#undef SPU_DRAIN_AT_RETURN
  }
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index 0fca7f55..6abe1869 100644
+index 0fca7f55..f5d15959 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
 @@ -117,24 +117,98 @@ static inline u128 spu_mpy(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._s3
@@ -34414,7 +34414,7 @@ index 0fca7f55..6abe1869 100644
 + * scale keeps the product exact while it stays a plain normal float (or zero);
 + * any other lane takes the exact path. */
 +static inline __attribute__((always_inline)) u128 spu_xf_int_scale_n(float32x4_t vf, int i8, uint32x4_t big, int* ok) {
-+    u128 r; *ok = 0;
++    u128 r = {0}; *ok = 0;
 +    if (vmaxvq_u32(big) != 0 || i8 - 155 < -126 || i8 - 155 > 127) return r;
 +    const float32x4_t vr = vmulq_f32(vf, vreinterpretq_f32_u32(vdupq_n_u32((uint32_t)(i8 - 155 + 127) << 23)));
 +    if (spu_xf_e255_or_denorm_n(vreinterpretq_u32_f32(vr))) return r;
