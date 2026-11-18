@@ -2095,6 +2095,7 @@ extern "C" void racacit_u120_space_bits(ppu_context* ctx)
     memcpy(ctx->gpr, gpr, sizeof gpr); memcpy(ctx->fpr, fpr, sizeof fpr); memcpy(ctx->vr, vr, sizeof vr);
     ctx->cr = cr; ctx->lr = lr; ctx->ctr = ctr; ctx->xer = xer; ctx->fpscr = fpscr; ctx->vscr = vscr;
 }
+
 /* ---------------------------------------------------------------------------
  * Update 1.20's hero part masks in the disc build
  *
@@ -2185,6 +2186,7 @@ extern "C" void racacit_u120_part_masks(ppu_context* ctx)
         if ((int32_t)r2 != (int32_t)none) pm |= racacit_bit64(vm_read8(t + a2 + r2));
         vm_write64(P + 0x118u, pm);
     }
+}
 
 // Disc-only 1.20 fixes end.
 
