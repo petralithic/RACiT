@@ -554,34 +554,46 @@ def patch_file(path):
             src = src[:i] + decl + src[i:]
         changed = True
 
-    # Desktop follow-camera distances: preserve the game's orbit/collision and pitch bounds.
-    sp = func_span(src, 'func_000459D4')
+    # 20. Mouse turning of the follow camera (game/desktop_mouse.cpp). In the
+    #     1.00 lift, f1 before the call at 0x45D68 is the game's yaw step
+    #     ([r31+0x178] * frame time) and f31 before the subtraction at 0x45CBC
+    #     its pitch step. The mouse's angles are added to both; the pitch is held
+    #     in the game's limits (r30 - 0x7F24 / - 0x7F1C) before the game wraps
+    #     it, so a fast swipe cannot jump past a limit. With no mouse motion
+    #     racit_camera_take returns 0 and nothing changes. (Update 1.20 gets the
+    #     same edit from versions/BCUS98124-1.20-hooks.json, with its rotation
+    #     func_006344D8.)
+    camera, rotate = 'func_000459D4', 'func_00633C34'
+    sp = func_span(src, camera)
     if sp and 'racit_camera_take' not in src[sp[0]:sp[2]]:
-        a, body, end = sp
-        fn = src[a:end]
+        a_, body_, end_ = sp
+        fn = src[a_:end_]
         changes = (
-            ('void func_000459D4(ppu_context* ctx) {',
-             'void func_000459D4(ppu_context* ctx) {\n        double mouse_angles[2] = {};\n        const int mouse_direct = racit_camera_take(mouse_angles,(uint64_t)((double)SDL_GetPerformanceCounter()*1000000000.0/(double)SDL_GetPerformanceFrequency()));'),
-            ('        ctx->lr = 0x00045D6C; func_00633C34(ctx); DRAIN_TRAMPOLINE(ctx);',
-             '        if (mouse_direct) ctx->fpr[1] = -mouse_angles[0];\n        ctx->lr = 0x00045D6C; func_00633C34(ctx); DRAIN_TRAMPOLINE(ctx);'),
-            ('        ctx->fpr[3] = ppu_fp_single(ppu_fsub(ctx->fpr[31], ctx->fpr[1]));',
-             '''        if (mouse_direct) {
-            uint32_t lb=vm_read32(ctx->gpr[30]-0x7F24), hb=vm_read32(ctx->gpr[30]-0x7F1C);
-            float lo,hi; memcpy(&lo,&lb,4); memcpy(&hi,&hb,4);
-            const double target=mouse_angles[1]-ctx->fpr[1];
-            ctx->fpr[31]=fmin(fmax(target,lo),hi)+ctx->fpr[1];
-        }
-        ctx->fpr[3] = ppu_fp_single(ppu_fsub(ctx->fpr[31], ctx->fpr[1]));'''),
+            ('void %s(ppu_context* ctx) {\n' % camera,
+             'void %s(ppu_context* ctx) {\n'
+             '        double mouse_angles[2];   /* racacit: mouse camera */\n'
+             '        const int mouse_turn = racit_camera_take(mouse_angles);\n' % camera),
+            ('        ctx->lr = 0x00045D6C; %s(ctx); DRAIN_TRAMPOLINE(ctx);\n' % rotate,
+             '        if (mouse_turn) ctx->fpr[1] -= mouse_angles[0];\n'
+             '        ctx->lr = 0x00045D6C; %s(ctx); DRAIN_TRAMPOLINE(ctx);\n' % rotate),
+            ('        ctx->fpr[3] = ppu_fp_single(ppu_fsub(ctx->fpr[31], ctx->fpr[1]));\n',
+             '        if (mouse_turn) {\n'
+             '            uint32_t lb = vm_read32(ctx->gpr[30] + -0x7F24), hb = vm_read32(ctx->gpr[30] + -0x7F1C);\n'
+             '            float lo, hi; memcpy(&lo, &lb, 4); memcpy(&hi, &hb, 4);\n'
+             '            const double pitch = ctx->fpr[31] + mouse_angles[1] - ctx->fpr[1];\n'
+             '            ctx->fpr[31] = fmin(fmax(pitch, (double)lo), (double)hi) + ctx->fpr[1];\n'
+             '        }\n'
+             '        ctx->fpr[3] = ppu_fp_single(ppu_fsub(ctx->fpr[31], ctx->fpr[1]));\n'),
         )
-        for old, new in changes:
-            assert fn.count(old) == 1, 'desktop camera: original code does not match'
-            fn = fn.replace(old, new, 1)
-        src = src[:a] + fn + src[end:]
-        i = src.index('\n', src.index('#include')) + 1
-        src = src[:i] + ('extern "C" int racit_camera_take(double*, unsigned long long);\n'
-                        'extern "C" unsigned long long SDL_GetPerformanceCounter(void);\n'
-                        'extern "C" unsigned long long SDL_GetPerformanceFrequency(void);\n') + src[i:]
-        changed = True
+        if all(fn.count(old) == 1 for old, _ in changes):
+            for old, new in changes:
+                fn = fn.replace(old, new, 1)
+            src = src[:a_] + fn + src[end_:]
+            i = src.index('\n', src.index('#include')) + 1
+            src = src[:i] + 'extern "C" int racit_camera_take(double* angles);\n' + src[i:]
+            changed = True
+        else:
+            print('patch_lift #20: %s does not match; the mouse stays on the right stick' % camera)
 
     # Keyboard menu prompts (game/menu_keycaps.h): the menu movies have two
     # separate frame paths in BCUS98124 disc 1.00. Publish the key labels before

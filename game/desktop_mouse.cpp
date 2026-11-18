@@ -1,55 +1,69 @@
-/* Desktop mouse runtime for RACiT. C ABI and C++11 atomics.
- * Camera displacement is consumed once per follow-camera update. */
+/* Mouse turning of the third-person follow camera.
+ *
+ * The pad thread (tools/ps3recomp libs/input/cellPad.c, pad_poll_kbm) adds the
+ * captured mouse's motion here; the follow camera's update (func_000459D4, hooked
+ * by scripts/patch_lift.py) takes it as yaw/pitch angles, adds them to the
+ * game's own stick-driven turn and keeps the game's pitch limits. Each move is
+ * used once, at full resolution and without the right stick's speed cap.
+ *
+ * While the hook has not run lately (another camera, a menu, a pause, or an
+ * executable without the hook), racit_camera_feed returns 0 and the mouse
+ * stays the right-stick emulation it was. */
 #include <atomic>
-#include <cmath>
+#include <chrono>
 #include <cstdint>
-#include <algorithm>
+
 namespace {
 std::atomic<bool> captured{false};
-std::atomic<int64_t> camera_x{0}, camera_y{0};
-std::atomic<uint64_t> follow_time{0};
-}
-extern "C" int racit_camera_follow_active(uint64_t now)
+std::atomic<int64_t> yaw_nrad{0}, pitch_nrad{0};   /* pending turn, nanoradians */
+std::atomic<int64_t> follow_ns{0};                  /* last follow-camera update */
+
+int64_t now_ns()
 {
-    const uint64_t last = follow_time.load();
-    return last > 0 && (now < last || now - last < 1000000000ULL);
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-extern "C" void racit_camera_feed(uint64_t now, int dx, int dy, int capture, float sensitivity, int invert)
+
+/* Longer than a slow frame, short enough that motion made in a menu or another
+ * camera is dropped instead of turning the camera when play resumes. */
+constexpr int64_t kFollowWindowNs = 250000000;
+
+bool follow_active(int64_t now)
 {
-    if (!capture) {
-        captured.store(false); camera_x.store(0); camera_y.store(0); return;
+    const int64_t last = follow_ns.load();
+    return last != 0 && now - last < kFollowWindowNs;
+}
+}
+
+/* Pad thread, every poll. dx/dy: the captured mouse's motion in counts since the
+ * last poll. sensitivity: RACACIT_MOUSE_SENS in hundredths (100 = 1.0).
+ * Returns 1 while the follow camera takes the mouse (the caller then leaves the
+ * right stick alone), 0 when the mouse should drive the stick emulation. */
+extern "C" int racit_camera_feed(int dx, int dy, int capture, int sensitivity, int invert_y)
+{
+    if (!capture || !follow_active(now_ns())) {
+        captured.store(false);
+        yaw_nrad.store(0);
+        pitch_nrad.store(0);
+        return 0;
     }
-    if (!racit_camera_follow_active(now)) {
-        camera_x.store(0); camera_y.store(0); captured.store(true); return;
-    }
+    /* 0.003 rad (about 0.17 degrees) per count at speed 1.0. */
     const double gain = 3000000.0 * sensitivity / 100.0;
-    camera_x.fetch_add((int64_t)(dx * gain));
-    camera_y.fetch_add((int64_t)(dy * gain * (invert ? -1 : 1)));
+    yaw_nrad.fetch_add((int64_t)(dx * gain));
+    pitch_nrad.fetch_add((int64_t)(dy * gain * (invert_y ? -1 : 1)));
     captured.store(true);
+    return 1;
 }
-extern "C" int racit_camera_take(double* angles, uint64_t now)
+
+/* Follow-camera update (guest thread). angles[0] = yaw, angles[1] = pitch, in
+ * radians, consumed. Returns 0 when there is nothing to add, so the game's own
+ * values pass through unchanged. */
+extern "C" int racit_camera_take(double* angles)
 {
-    follow_time.store(now);
+    follow_ns.store(now_ns());
+    angles[0] = angles[1] = 0.0;
     if (!captured.load()) return 0;
-    angles[0] = (double)camera_x.exchange(0) / 1000000000.0;
-    angles[1] = (double)camera_y.exchange(0) / 1000000000.0;
+    angles[0] = (double)yaw_nrad.exchange(0) / 1e9;
+    angles[1] = (double)pitch_nrad.exchange(0) / 1e9;
     return angles[0] != 0.0 || angles[1] != 0.0;
-}
-struct RacitMouseState { uint64_t epoch_ns; int64_t dx, dy; float x, y; };
-extern "C" void racit_mouse_step(RacitMouseState* state, uint64_t now, int dx, int dy, int capture, float sensitivity, int invert)
-{
-    if (!capture) { *state = {}; return; }
-    if (!state->epoch_ns) state->epoch_ns = now;
-    state->dx += dx; state->dy += dy;
-    const uint64_t elapsed = now - state->epoch_ns;
-    if (elapsed < 8000000) return;
-    const float gain = .11f * sensitivity / 100.f;
-    const auto convert = [elapsed, gain](int64_t distance) {
-        if (!distance) return 0.f;
-        const float speed = std::fabs((float)distance) / ((float)elapsed / 1000000.f) * gain;
-        const float value = .22f + .78f * std::min(speed, 1.f);
-        return distance < 0 ? -value : value;
-    };
-    state->x = convert(state->dx); state->y = convert(state->dy) * (invert ? -1.f : 1.f);
-    state->dx = state->dy = 0; state->epoch_ns = now;
 }
