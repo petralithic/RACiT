@@ -202,7 +202,7 @@ const int kHudRows = (kKeyH + 3) / 4, kKeyBytes = kHudRows * kKeyCols * 16;
  * texture header the game loads right after the font's records: section
  * 0x5200, 32-byte entries, RSX local offset at +0, format at +6, width
  * at +0x18). Host pointer to a DXT5 page and its pitch, or NULL. */
-const uint8_t* font_page_at(uint32_t rec, int page, uint32_t* pitch, int* width=nullptr, int* height=nullptr)
+const uint8_t* font_page_at(uint32_t rec, int page, uint32_t* pitch, int* width=nullptr, int* height=nullptr, int* levels=nullptr)
 {
     /* Explicit page permits face, stick and keyboard glyphs too. */   /* the E00B record's page */
     const uint32_t a0 = (rec + 255u) & ~255u, re = readable_end(a0);
@@ -218,7 +218,7 @@ const uint8_t* font_page_at(uint32_t rec, int page, uint32_t* pitch, int* width=
         const uint32_t ea = cellGcmResolveLocated(1, be32(t));
         *pitch = (uint32_t)w / 4u * 16u;
         if (!ea || !readable(ea, *pitch * (uint32_t)(hh / 4))) return nullptr;
-        if (width) *width=w; if (height) *height=hh;
+        if (width) *width=w; if (height) *height=hh; if (levels) *levels=t[5] ? t[5] : 1;   /* mip levels at +5 */
         return vm_base + ea;
     }
     return nullptr;
@@ -524,6 +524,54 @@ void badge_sync(int want)
 /* Every committed page of guest memory, 16-byte steps: the records sit at
  * 16-byte offsets in a font.dat that the game loads 16-byte aligned. */
 #include "desktop_prompts.h"
+#include "hud_keycaps.h"
+
+/* RACACIT_PROMPT_DIAG=1: every button-glyph record table (E001..E004 in a
+ * row, any atlas layout) and the HUD texture table round the "R2 + square"
+ * entry, logged at each scan. Diagnostics only. */
+void prompt_diag(uint32_t hud)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("RACACIT_PROMPT_DIAG"); on = e && *e == '1'; }
+    if (!on) return;
+    for (uint32_t a = 0x10000u; a < 0x40000000u; ) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery(vm_base + a, &mbi, sizeof mbi)) break;
+        uint32_t end = (uint32_t)((uint8_t*)mbi.BaseAddress + mbi.RegionSize - vm_base);
+        if (end > 0x40000000u || end <= a) end = 0x40000000u;
+        if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && end - a >= 448)
+            for (uint32_t p = (a + 15u) & ~15u; p + 448 <= end; p += 16) {
+                const uint8_t* q = vm_base + p;
+                if (be16(q) != 0xE001 || be16(q + 16) != 0xE002 || be16(q + 32) != 0xE003 || be16(q + 48) != 0xE004) continue;
+                fprintf(stderr, "[prompt-diag] glyph table at %08X:", p);
+                for (int k = 0; k < 26; k++) {
+                    const uint8_t* r = q + 16 * k;
+                    fprintf(stderr, " %04X@%d,%d p%d %dx%d", be16(r), be16(r + 2), be16(r + 4), be16(r + 6), r[10], r[11]);
+                }
+                fputc(10, stderr);
+            }
+        a = end;
+    }
+    /* With RACACIT_PROMPT_DUMP too: the font's other button glyphs (E00F
+     * on: the d-pad and radar pictures) as hudkey_E0xx.ppm. */
+    for (unsigned key = 14; key < 26 && s_nfont; key++) {
+        const uint32_t rec = s_font[0] - 6 * 16 + key * 16;
+        if (!readable(rec, 16) || be16(vm_base + rec) != 0xE001 + key) continue;
+        const int w = vm_base[rec + 10], h = vm_base[rec + 11];
+        static uint8_t img[255 * 255 * 4];
+        bool ok = w > 0 && h > 0;
+        for (int y = 0; ok && y < h; y++)
+            for (int x = 0; ok && x < w; x++) ok = glyph_pixel(key, x, y, img + 4 * (y * w + x));
+        if (ok) hudkey_dump(0xE001 + key, img, img, w, h);
+    }
+    if (hud && readable(hud - 64 * 32, 129 * 32))
+        for (int k = -64; k <= 64; k++) {
+            const uint8_t* t = vm_base + hud + 32 * k;
+            fprintf(stderr, "[prompt-diag] hud %+d %08X:", k, hud + 32 * k);
+            for (int i = 0; i < 32; i++) fprintf(stderr, "%s%02X", i % 4 ? "" : " ", t[i]);
+            fputc(10, stderr);
+        }
+}
 
 void scan(void)
 {
@@ -553,6 +601,7 @@ void scan(void)
         a = end;
     }
     fprintf(stderr, "[prompts] memory scan: %llu ms, %d letter-font candidates%c", GetTickCount64() - t0, s_lf_calls, 10);
+    prompt_diag(hud);
     if (n != s_nfont) fprintf(stderr, "[prompts] button glyphs found in %d font(s)%c", n, 10);
     s_nfont = n;
     for (int k = 0; k < nb; k++) {
@@ -567,6 +616,27 @@ void scan(void)
         const uint32_t ea = cellGcmResolveLocated(0, be32(vm_base + hud));
         if (ea) { s_hud.entry = hud; s_hud.ea = ea;
                   fprintf(stderr, "[prompts] HUD picture \"R2 + square\" found at %08X (table %08X)%c", ea, hud, 10); } }
+    if (s_hud.entry) hud_faces_find(s_hud.entry);
+}
+
+/* Keyboard prompts or controller glyphs. RACACIT_PROMPT_INPUT_FILE=<file>
+ * (tests): "pad" or "keyboard" in it overrides cellPad's choice, re-read
+ * once a second, so a headless run (whose scripted pad never counts as a
+ * controller) can switch both ways. */
+bool prompts_keyboard(bool reread)
+{
+    static const char* file = (const char*)-1;
+    static int forced = -1;
+    if (file == (const char*)-1) { file = getenv("RACACIT_PROMPT_INPUT_FILE"); if (file && !*file) file = nullptr; reread = true; }
+    if (file && reread) {
+        char buf[16] = {};
+        FILE* f = fopen(file, "rb");
+        if (f) { fread(buf, 1, sizeof buf - 1, f); fclose(f); }
+        const int now = !strncmp(buf, "pad", 3) ? 0 : !strncmp(buf, "keyboard", 8) ? 1 : -1;
+        if (now != forced) fprintf(stderr, "[prompts] input forced: %s%c", now < 0 ? "no" : now ? "keyboard" : "pad", 10);
+        forced = now;
+    }
+    return forced >= 0 ? forced != 0 : racit_keyboard_prompts_active() != 0;
 }
 
 DWORD WINAPI prompts_thread(LPVOID)
@@ -584,7 +654,7 @@ DWORD WINAPI prompts_thread(LPVOID)
             if (next < sizeof kScanAt / sizeof kScanAt[0] && t == kScanAt[next]) { scan(); next++; } }
         static int force = -2;   /* RACACIT_PROMPT_LAYOUT=<0|1|2>: a layout for tests */
         if (force == -2) { const char* e = getenv("RACACIT_PROMPT_LAYOUT"); force = e && *e ? atoi(e) : -1; }
-        const bool keyboard = racit_keyboard_prompts_active() != 0;
+        const bool keyboard = prompts_keyboard(!ms);
         const int layout = keyboard ? 0 : force >= 0 ? force : g_racacit_pad_layout;
         /* R1 <-> R2 with the layout swapped (R2 fires); L1 <-> L2 only while
          * the quick select ring is open, where L2 / R2 page (cellPad.c). */
@@ -601,7 +671,11 @@ DWORD WINAPI prompts_thread(LPVOID)
             if (has_r != want_r) { swap_records(s_font[i] + 64, s_font[i] + 80); changed = 1; }   /* R1 <-> R2 */
         }
         if (keyboard) desktop_prompts(true);
-        if (!ms) { hud_sync(want_r); badge_sync(want_r); }
+        if (!ms) {
+            /* HUD pictures: keys, or the controller's own (with the R1/L2 swaps) */
+            hud_faces_sync(keyboard); hud_keys_sync(keyboard); badge_keys_sync(keyboard);
+            if (!keyboard) { hud_sync(want_r); badge_sync(want_r); }
+        }
         if ((changed && !want_l) || (unsigned)layout != last_layout)
             if (s_nfont) fprintf(stderr, "[prompts] controller layout %d: shoulder buttons in the text %s%c", layout,
                                  want_r ? "R1<->R2 (L1<->L2 while quick select is open)" : "as the PS3 layout", 10);
