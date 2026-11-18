@@ -188,6 +188,9 @@ extern void (*g_gcm_wake_walker)(void);       /* wake frame_clock for a drain no
  * path anywhere else -- the same selection runtime/host/host_posix.c and the
  * toolkit's boot harness make. All three expose the same three entry points,
  * so the frame clock below is backend-agnostic. */
+/* The runtime provides these with any backend (rsx_host_ui.c, rsx_draw_engine.c). */
+extern "C" int  rsx_host_ui_modal(void);
+extern "C" unsigned long long g_rt_drain_total_us, g_rt_present_total_us;
 #if defined(_WIN32) && !defined(RACACIT_HAVE_VULKAN)
 extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_d3d12_backend_present(void);
@@ -234,8 +237,6 @@ extern "C" int  rsx_null_backend_pump_messages(void);
 #  if defined(RACACIT_HAVE_VULKAN)
 extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_vulkan_backend_present(void);
-extern "C" int  rsx_host_ui_modal(void);
-extern "C" unsigned long long g_rt_drain_total_us, g_rt_present_total_us;
 extern "C" int  rsx_vulkan_backend_pump_messages(void);
 #  endif
 static void (*g_rsx_present)(void) = rsx_null_backend_present;
