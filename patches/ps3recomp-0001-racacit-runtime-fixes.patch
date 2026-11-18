@@ -5902,7 +5902,7 @@ index 2d4a54d4..49dff976 100644
  static int  s_boot_checked = 0;
  static u32  s_game_type = CELL_GAME_GAMETYPE_DISC;
 diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
-index 1fb1b120..cffb6e52 100644
+index 1fb1b120..3c126041 100644
 --- a/libs/system/cellSaveData.c
 +++ b/libs/system/cellSaveData.c
 @@ -30,6 +30,17 @@
@@ -8564,7 +8564,7 @@ index 854739e7..7c24379b 100644
                                " tex0=0x%08X texrt=%d dvp=%.0f,%.0f %.0fx%.0f%c",
                                dr->vertex_count, dr->vb_byte_offset / 256, cur_rt,
 diff --git a/libs/video/rsx_dispatch.c b/libs/video/rsx_dispatch.c
-index a7ef9020..29507421 100644
+index a7ef9020..f0680ca0 100644
 --- a/libs/video/rsx_dispatch.c
 +++ b/libs/video/rsx_dispatch.c
 @@ -178,6 +178,12 @@ void rsx_dispatch_init(rsx_dispatch* rsx, const rsx_dispatch_sink* sink)
@@ -8670,7 +8670,7 @@ index a7ef9020..29507421 100644
  void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
  {
      method &= 0xFFFFC;
-@@ -328,10 +410,28 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -328,10 +410,33 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
          return;
      }
      rsx->seen[idx]++;
@@ -8694,12 +8694,17 @@ index a7ef9020..29507421 100644
      if ((method >= 0x1500 && method < 0x1A00) || (method >= 0x1E40 && method < 0x1E80) ||
          (method >= 0x0A80 && method < 0x0B00))
          vtx_const_fold(rsx, method, arg);
-+    if (rsx->in_begin_end && imm_is_attr0_last_word(method))
++    /* RACiT's immediate-mode emulation (an inline stream built at END) only
++     * for a sink without upstream's immediate_vertex hook: with both, every
++     * immediate draw arrived as immediate AND inline geometry and the draw
++     * engine rejected it as mixed -- A Crack in Time's post-process and
++     * final composite quads, so a level never replaced the LOADING screen. */
++    if (rsx->in_begin_end && !rsx->sink.immediate_vertex && imm_is_attr0_last_word(method))
 +        imm_emit_vertex(rsx);
  
      /* Completing a position emits a register-based vertex: the last word of
       * ATTR0 in any of its immediate encodings. Other attributes update the
-@@ -359,8 +459,10 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -359,8 +464,10 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
          const u32 lane = ((method - M_VP_UPLOAD_INST) >> 2) & 3;
          u32* load = &rsx->regs[M_VP_UPLOAD_FROM_ID >> 2];
          const u32 pos = *load * 4 + lane;
@@ -8711,7 +8716,7 @@ index a7ef9020..29507421 100644
          if (lane == 3)
              (*load)++;
          return;
-@@ -372,8 +474,15 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -372,8 +479,15 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
      if (method >= M_VP_UPLOAD_CONST && method < M_VP_UPLOAD_CONST + 32 * 4) {
          const u32 word = (method - M_VP_UPLOAD_CONST) >> 2;
          const u32 slot = rsx->regs[M_VP_UPLOAD_CONST_ID >> 2] + (word >> 2);
@@ -8728,7 +8733,7 @@ index a7ef9020..29507421 100644
          /* RSX_CONST_LOG=<lo>,<hi>: every transform-constant upload into that
           * slot range (first 400) -- what a shader's constants really were. */
          { static int lo = -2, hi = 0, n = 0;
-@@ -396,10 +505,29 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -396,10 +510,29 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
              rsx->in_begin_end = 1;
              rsx->current_primitive = arg;
              rsx->inline_len = 0;
@@ -8758,7 +8763,7 @@ index a7ef9020..29507421 100644
              /* Hand an inline stream over BEFORE end: the sink reads end as
               * "draw what you have", so a batch delivered after it would be
               * drawn one primitive late, or not at all. */
-@@ -409,6 +537,10 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -409,6 +542,10 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
              rsx->inline_len = 0;
              if (rsx->sink.end)
                  rsx->sink.end(rsx->sink.user, rsx);
@@ -8769,7 +8774,7 @@ index a7ef9020..29507421 100644
          }
          break;
  
-@@ -426,17 +558,16 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -426,17 +563,16 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
       * carrying no vertices at all: the backend saw BEGIN/END with nothing
       * between them and counted an empty group. */
      case M_INLINE_ARRAY:
@@ -8792,7 +8797,7 @@ index a7ef9020..29507421 100644
          }
          break;
  
-@@ -464,6 +595,46 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
+@@ -464,6 +600,46 @@ void rsx_dispatch_method(rsx_dispatch* rsx, u32 method, u32 arg)
      }
  }
  
