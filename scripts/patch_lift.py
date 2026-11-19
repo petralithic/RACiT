@@ -513,6 +513,26 @@ def patch_file(path):
                 src = src[:i] + 'extern "C" uint32_t racacit_equip_skin(uint32_t skin);\n' + src[i:]
             changed = True
 
+    # 26. The pause menu's Restart item (game/restart.cpp): a prepared menu
+    #     archive calls fscommand("RCCITRestart"). The game's FSCommand handler
+    #     func_004A27F8 (r5 = the command) checks for it first, at its head
+    #     before the frame is set up, and returns "handled" (r3 = 1) for it;
+    #     every other command goes on as before. (Update 1.20's handler is
+    #     func_004A2DF4: versions/BCUS98124-1.20-hooks.json.)
+    sp = func_span(src, 'func_004A27F8')
+    if sp and 'racacit_restart_fscommand' not in src[sp[0]:sp[2]]:
+        a_, body_, end_ = sp
+        fn = src[a_:end_]
+        head = 'void func_004A27F8(ppu_context* ctx) {\n'
+        if fn.count(head) != 1:
+            sys.exit('patch_lift #26: func_004A27F8: function head not found once: stopping rather than building without the Restart hook')
+        fn = fn.replace(head, head + '        if (racacit_restart_fscommand(ctx)) return;   /* racacit: menu Restart */\n', 1)
+        src = src[:a_] + fn + src[end_:]
+        if 'int racacit_restart_fscommand' not in src:
+            i = src.index('\n', src.index('#include')) + 1
+            src = src[:i] + 'extern "C" int racacit_restart_fscommand(ppu_context* ctx);\n' + src[i:]
+        changed = True
+
     # 18. Field of view and camera distance (Settings > General > Camera; game/stubs.cpp),
     #     both on the follow camera (Ratchet's gameplay camera), so cutscenes and other
     #     cameras keep the game's own. Its target angle (+0x1D4) where its angle (+0x90)

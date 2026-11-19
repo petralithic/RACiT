@@ -608,6 +608,12 @@ static void racacit_memlog(unsigned long long now_us)
 #endif
 
 extern "C" int cellGcm_fifo_pending(void);
+/* The menu's Restart item (game/restart.cpp) and the settings it writes first. */
+extern "C" void racit_restart_install_sigterm_handler(void);
+extern "C" int racit_restart_ready(void);
+extern "C" int racit_restart_exit_status(void);
+extern "C" void rsx_host_ui_flush_settings(void);
+
 static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
@@ -639,6 +645,7 @@ static DWORD WINAPI frame_clock(LPVOID)
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
             rsx_ok ? "OK -- window open" : "FAILED");
 
+    racit_restart_install_sigterm_handler();   /* game/restart.cpp */
     unsigned  last_flip = 0;
     /* The vblank beat, on the microsecond clock: GetTickCount64 only moves
      * every ~15.6 ms (timeBeginPeriod does not change that), so a 16 ms step
@@ -799,6 +806,21 @@ static DWORD WINAPI frame_clock(LPVOID)
             }
             timed_drain();
             rt_report();
+            /* The menu's Restart (game/restart.cpp): once no save or load is in
+             * flight, write the settings and leave with 75 for the launcher. */
+            if (racit_restart_ready()) {
+                rsx_host_ui_flush_settings();
+                const int exit_status = racit_restart_exit_status();
+                fprintf(stderr, "[racit] %s after save operations finished\n",
+                        exit_status == 0 ? "stopping" : "restarting");
+                fflush(stdout); fflush(stderr);
+#ifdef _WIN32
+                racacit_log_flush();
+                TerminateProcess(GetCurrentProcess(), exit_status);
+#else
+                _exit(exit_status);
+#endif
+            }
 
             /* Window events every 4 ms, not every pass: SDL_PollEvent also
              * polls every input device (SDL_SensorUpdate and the rest), and
