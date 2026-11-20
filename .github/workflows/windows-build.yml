@@ -1,6 +1,7 @@
-# Windows build checks that need no game data: the launcher, the ps3recomp runtime with
-# this repository's patch, and the tests, with MSVC (native cl) and with the release
-# toolchain (zig's clang, scripts/setup_windows.sh). The game itself needs a lift of the
+# Windows build checks that need no game data: the launcher and the tests with MSVC
+# (native cl), and the launcher, the tests and the ps3recomp runtime with this repository's
+# patch with the release toolchain (zig's clang, scripts/setup_windows.sh). Upstream
+# ps3recomp uses GCC/clang builtins, so the runtime is not built with cl. The game itself needs a lift of the
 # player's own EBOOT, so it is not built here.
 name: Windows build
 # Runs only when started on purpose, to save CI minutes: push the commit to check to a
@@ -30,8 +31,13 @@ jobs:
           python-version: '3.12'
       - name: tests/*.py (clang++ from the runner's LLVM builds the C++ harnesses)
         shell: bash
+        # Git Bash first, so the tests' bash is never System32's WSL one. The runner's LLVM
+        # can be older than the Clang its MSVC STL asks for (STL1000); the harnesses are plain
+        # C++17, so the version check is waived (clang appends CCC_OVERRIDE_OPTIONS' +args).
+        env:
+          CCC_OVERRIDE_OPTIONS: '+-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH'
         run: |
-          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          export PATH="/c/Program Files/Git/bin:/c/Program Files/LLVM/bin:$PATH"
           clang++ --version | head -1
           python -X utf8 -m unittest discover -s tests -v
 
@@ -85,41 +91,6 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ctest --test-dir build/tests --output-on-failure
 
-  msvc-runtime:
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756   # v1.13.0
-      - name: Pinned ps3recomp with the runtime patch, Vulkan headers
-        shell: bash
-        run: |
-          for r in "ps3recomp sp00nznet/ps3recomp $PS3RECOMP_COMMIT" "Vulkan-Headers KhronosGroup/Vulkan-Headers $VULKAN_HEADERS_COMMIT"; do
-            set -- $r
-            git init -q "tools/$1"
-            git -C "tools/$1" fetch -q --depth 1 "https://github.com/$2" "$3"
-            git -C "tools/$1" checkout -q FETCH_HEAD
-          done
-          bash scripts/update_runtime_patch.sh "$PWD/tools/ps3recomp" "$PWD/patches/ps3recomp-0001-racacit-runtime-fixes.patch"
-      - name: SDL2 (VC development package)
-        shell: pwsh
-        run: |
-          $v = $env:SDL2_VERSION
-          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$v/SDL2-devel-$v-VC.zip" -OutFile sdl.zip
-          Expand-Archive sdl.zip -DestinationPath sdl
-      - name: ps3recomp runtime (cl, Vulkan RSX, SDL2 pad/audio)
-        shell: pwsh
-        run: |
-          cmake -S tools/ps3recomp -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release `
-            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_WIN_USE_SDL2=ON `
-            -DPS3RECOMP_VULKAN_INCLUDE_DIR="$PWD/tools/Vulkan-Headers/include" `
-            -DSDL2_DIR="$PWD/sdl/SDL2-$env:SDL2_VERSION/cmake"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cmake --build build/runtime --target ps3recomp_runtime -- -k 0
-
   zig:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -159,5 +130,6 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$PWD/windows/toolchain/zig-windows.cmake" \
             -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_WIN_USE_SDL2=ON \
             -DPS3RECOMP_VULKAN_INCLUDE_DIR="$PWD/tools/Vulkan-Headers/include" \
-            -DSDL2_DIR="$PWD/tools/sdl2-win/lib/cmake/SDL2"
+            -DSDL2_DIR="$PWD/tools/sdl2-win/lib/cmake/SDL2" \
+            -DCMAKE_C_FLAGS="-I$PWD/tools/zlib"   # game/CMakeLists.txt adds this for cellSpurs' Edge zlib queue
           cmake --build build/runtime --target ps3recomp_runtime -- -k 0
