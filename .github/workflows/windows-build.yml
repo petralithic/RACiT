@@ -3,8 +3,11 @@
 # toolchain (zig's clang, scripts/setup_windows.sh). The game itself needs a lift of the
 # player's own EBOOT, so it is not built here.
 name: Windows build
-# Manual only, to save CI minutes: gh workflow run windows-build.yml -R petralithic/RACiT --ref <branch>
+# Runs only when started on purpose, to save CI minutes: push the commit to check to a
+# branch named ci/run/<name> (GitHub can't dispatch a workflow that isn't on the default branch).
 on:
+  push:
+    branches: ['ci/run/**']
   workflow_dispatch:
 permissions:
   contents: read
