@@ -99,7 +99,7 @@ class HookLists(unittest.TestCase):
     def test_menu_and_camera_hooks_are_checked_on_every_version(self):
         for profile in PROFILES:
             hooks, functions = hook_list(profile)
-            for name in ('racit_camera_take', 'racit_publish_menu_keyboard', 'racacit_front_end_cards'):
+            for name in ('racit_camera_turn', 'racit_camera_peek', 'racit_publish_menu_keyboard', 'racacit_front_end_cards'):
                 self.assertIn(name, hooks, profile)
             self.assertTrue(functions, profile + ' needs @function lines to recognise its lift')
 
@@ -234,9 +234,14 @@ class CheckLiftHooks(unittest.TestCase):
         # A lift patched before racacit_lua_throw_hook existed: --patch runs patch_lift.py,
         # which puts it in, and the check passes; a second run with the stamp leaves it be.
         hooks, functions = hook_list('BCUS98124-1.00')
+        # patch_lift.py also stops unless it finds every mouse camera (tests/test_mouse_repatch.py).
+        from test_mouse_repatch import camera_function, recipe
+        names = recipe()
+        cameras = ''.join(camera_function(func, names['MOUSE_CAMERAS'][name])
+                          for name, func in sorted(names['_DISC_CAMERAS'].items()))
         with tempfile.TemporaryDirectory() as directory:
             self.lift(directory, hooks, functions, leave_out=('racacit_lua_throw_hook',),
-                      extra='void func_0050A83C(ppu_context* ctx) {\n        return;\n}')
+                      extra='void func_0050A83C(ppu_context* ctx) {\n        return;\n}\n' + cameras)
             stamp = Path(directory) / 'patched.ok'
             result = self.run_check(directory, 'BCUS98124-1.00', '--patch', '--stamp', str(stamp))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
