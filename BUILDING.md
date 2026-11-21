@@ -289,6 +289,8 @@ VK_DRIVER_FILES="$build/lib/MoltenVK_icd.json" \
 ```
 
 Use its `RSX_PROGRAM_LIST` path if you configured a separate program list.
+The progress and completion files are written next to `RSX_PIPELINE_CACHE`.
+When that value is a filename, they are written in the current directory.
 The command reports an error if Vulkan cannot initialize or the cache cannot
 be saved.
 
