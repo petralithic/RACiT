@@ -21441,7 +21441,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b79..4be7dea5 100644
+index e2687b79..bd8a410a 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,14 @@
@@ -27158,7 +27158,7 @@ index e2687b79..4be7dea5 100644
      return smp;
  }
  
-@@ -2807,67 +6862,527 @@ static VkImageView vk_eng_sample_view(u32 handle)
+@@ -2807,67 +6862,526 @@ static VkImageView vk_eng_sample_view(u32 handle)
                 ? o->im.view : VK_NULL_HANDLE;
  }
  
@@ -27437,6 +27437,7 @@ index e2687b79..4be7dea5 100644
 + * cache cleared with the batch's descriptor pool. A fresh set written for
 + * every draw was ~6% of the RSX thread. VK_NULL_HANDLE = pool exhausted. */
 +#define VK_SETC 2048u
++#define VK_SET_PROBES 9u
 +static struct { u64 key; VkDescriptorSet set; } s_setc[VK_SETC];
 +static u32 s_setc_epoch;
 +static VkDescriptorSet vk_eng_set_for(vk_bt_slot* sl, u32 vsb, u32 psb, u32 sampler_gen)
@@ -27457,10 +27458,10 @@ index e2687b79..4be7dea5 100644
 +    #undef VK_MIX
 +    h |= 1u;
 +    u32 i = (u32)(h ^ (h >> 32)) & (VK_SETC - 1u);
-+    for (u32 probe = 1; ; ++probe) {
++    u32 probe;
++    for (probe = 0; probe < VK_SET_PROBES; probe++, i = (i + 1u) & (VK_SETC - 1u)) {
 +        if (s_setc[i].key == h) return s_setc[i].set;
-+        if (!s_setc[i].key || probe == 8u) break;
-+        i = (i + 1u) & (VK_SETC - 1u);
++        if (!s_setc[i].key) break;
 +    }
 +    VkDescriptorSet set = VK_NULL_HANDLE;
 +    VkDescriptorSetAllocateInfo dai = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -27469,9 +27470,7 @@ index e2687b79..4be7dea5 100644
 +    if (pvkAllocateDescriptorSets(s_vk.device, &dai, &set) != VK_SUCCESS) return VK_NULL_HANDLE;
 +    VkDescriptorBufferInfo bi[2] = { { sl->arena.buf, 0, vsb }, { sl->arena.buf, 0, psb } };
 +    vk_eng_write_descriptors_to(set, bi);
-+    /* Replace the last entry if the probe window is full. The evicted set
-+     * stays allocated for the batch, where earlier draws may still use it. */
-+    if (sampler_gen == s_sampler_gen) { s_setc[i].key = h; s_setc[i].set = set; }
++    if (probe < VK_SET_PROBES && sampler_gen == s_sampler_gen) { s_setc[i].key = h; s_setc[i].set = set; }
 +    return set;
 +}
 +
@@ -27708,7 +27707,7 @@ index e2687b79..4be7dea5 100644
      if (vk_ensure_vertex_buffer(vbytes)) return;
      memcpy(s_vk.vertices.ptr, vertices, (size_t)vbytes);
      if (indices && index_count) {
-@@ -2880,30 +7395,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2880,30 +7394,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      /* Everything submitted before is complete (each submission is waited
       * on); this orders memory for the surfaces this draw touches. */
      for (u32 i = 0; i < n; i++)
@@ -27746,7 +27745,7 @@ index e2687b79..4be7dea5 100644
      VkDeviceSize off = 0;
      pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &s_vk.vertices.buf, &off);
      if (indices && index_count) {
-@@ -2916,6 +7419,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2916,6 +7418,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      vk_submit_and_wait();
  }
  
@@ -27775,7 +27774,7 @@ index e2687b79..4be7dea5 100644
  static const rsx_draw_backend s_vk_engine_backend = {
      .user                 = NULL,
      .init                 = vk_eng_init,
-@@ -2930,6 +7455,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2930,6 +7454,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .depth_target_create  = vk_eng_depth_target_create,
      .depth_target_release = vk_eng_release,
      .depth_snapshot       = vk_eng_depth_snapshot,
@@ -27789,7 +27788,7 @@ index e2687b79..4be7dea5 100644
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
      .bind_targets         = vk_eng_bind_targets,
-@@ -2941,6 +7473,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2941,6 +7472,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .set_viewport         = vk_eng_set_viewport,
      .set_scissor          = vk_eng_set_scissor,
      .set_stencil_ref      = vk_eng_set_stencil_ref,
@@ -27798,7 +27797,7 @@ index e2687b79..4be7dea5 100644
      .draw                 = vk_eng_draw,
      .clear_color          = vk_eng_clear_color,
      .clear_depth_stencil  = vk_eng_clear_depth_stencil,
-@@ -2969,8 +7503,33 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2969,8 +7502,33 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      s_vk.height = height ? height : 720;
      s_vk.dump_path = getenv("PS3RECOMP_VK_DUMP");
  
@@ -27832,7 +27831,7 @@ index e2687b79..4be7dea5 100644
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                .pApplicationName = "ps3recomp", .pEngineName = "ps3recomp RSX",
-@@ -2981,11 +7540,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2981,11 +7539,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          ci.enabledExtensionCount   = s_vk.inst_ext_count;
          ci.ppEnabledExtensionNames = s_vk.inst_exts;
      }
@@ -27868,7 +27867,7 @@ index e2687b79..4be7dea5 100644
          ir = pvkCreateInstance(&ci, NULL, &s_vk.instance);
      }
      if (ir != VK_SUCCESS) { VK_LOG("vkCreateInstance failed (VkResult %d)\n", (int)ir); return -1; }
-@@ -3004,25 +7587,97 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3004,25 +7586,97 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          vk_window_drop("no device can present to the window");
          if (vk_pick_device()) return -1;
      }
@@ -27970,7 +27969,7 @@ index e2687b79..4be7dea5 100644
      if (vk_load_device_functions()) return -1;
      if (s_vk.windowed && vk_load_wsi_device_functions())
          vk_window_drop("the driver has no swapchain functions");
-@@ -3039,11 +7694,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3039,11 +7693,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      VK_CHECK(pvkAllocateCommandBuffers(s_vk.device, &cai, &s_vk.cmd), "vkAllocateCommandBuffers");
      VkFenceCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
      VK_CHECK(pvkCreateFence(s_vk.device, &fci, NULL, &s_vk.fence), "vkCreateFence");
@@ -27987,7 +27986,7 @@ index e2687b79..4be7dea5 100644
      if (vk_create_image(&s_vk.depth, s_vk.depth_format, s_vk.width, s_vk.height,
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) return -1;
-@@ -3097,13 +7756,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -3097,13 +7755,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
       * pipeline from the guest's programs, so without them it has nothing to
       * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
@@ -28004,7 +28003,7 @@ index e2687b79..4be7dea5 100644
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
             s_vk.width, s_vk.height, (int)s_vk.depth_format, title ? title : "");
      return 0;
-@@ -3125,7 +7785,10 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3125,7 +7784,10 @@ void rsx_vulkan_backend_shutdown(void)
      }
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
@@ -28015,7 +28014,7 @@ index e2687b79..4be7dea5 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -3145,6 +7808,7 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3145,6 +7807,7 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -28023,7 +28022,7 @@ index e2687b79..4be7dea5 100644
          if (s_vk.fence) pvkDestroyFence(s_vk.device, s_vk.fence, NULL);
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          pvkDestroyDevice(s_vk.device, NULL);
-@@ -3160,9 +7824,10 @@ int rsx_vulkan_backend_pump_messages(void)
+@@ -3160,9 +7823,10 @@ int rsx_vulkan_backend_pump_messages(void)
      if (!s_vk.windowed) return 0;
      int quit = 0;
      SDL_Event e;
@@ -28035,7 +28034,7 @@ index e2687b79..4be7dea5 100644
      }
      return quit ? -1 : 0;
  }
-@@ -3186,4 +7851,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
+@@ -3186,4 +7850,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
      return s_vk.eng_active ? rsx_draw_engine_guest_draws() : s_g.last_draws;
  }
  
