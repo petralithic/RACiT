@@ -1,0 +1,62 @@
+name: Desktop disc path probes
+on:
+  push:
+    branches: ['ci/run/racit-disc-probes-20261121']
+permissions:
+  contents: read
+jobs:
+  paths:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - name: Extract the two actual runtime revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git show 6d9fafc:patches/ps3recomp-0001-racacit-runtime-fixes.patch > tools/baseline.patch
+          for version in baseline current; do
+            patch=../baseline.patch
+            if [[ "$version" == current ]]; then patch=../../patches/ps3recomp-0001-racacit-runtime-fixes.patch; fi
+            git -C tools/ps3recomp apply --ignore-whitespace --include=runtime/syscalls/sys_fs.c "$patch"
+            sed -n '/^static void fs_normalize_sep(/,/^ \* sys_fs_open$/p' tools/ps3recomp/runtime/syscalls/sys_fs.c |
+              sed '$d' | sed '$d' > "tests/disc_probes_$version.inc"
+            git -C tools/ps3recomp restore -- runtime/syscalls/sys_fs.c
+          done
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Count Windows filesystem probes and verify fallback paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/disc-probes"
+          cl /nologo /std:c++17 /EHsc /W4 /D_CRT_SECURE_NO_WARNINGS /DBASELINE tests/disc_probes_fixture.cpp /Fe"$run/before.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /std:c++17 /EHsc /W4 /D_CRT_SECURE_NO_WARNINGS tests/disc_probes_fixture.cpp /Fe"$run/after.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Set-Location $run
+          & "./before.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "./after.exe"
+          exit $LASTEXITCODE
+      - name: Count native filesystem probes and verify fallback paths
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/disc-probes.XXXXXXXX")
+          c++ -std=c++17 -O2 -Wall -Wextra -DBASELINE tests/disc_probes_fixture.cpp -o "$run/before"
+          c++ -std=c++17 -O2 -Wall -Wextra tests/disc_probes_fixture.cpp -o "$run/after"
+          cd "$run"
+          ./before
+          ./after
