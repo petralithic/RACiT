@@ -254,6 +254,11 @@ static const std::vector<Opt>& opts()
         { "Keyboard and mouse", "RACACIT_KBM", "Play with keyboard and mouse", "1", { { "1", "On" }, { "0", "Off" } } },
         { "Keyboard and mouse", "RACACIT_MOUSE_SENS", "Mouse sensitivity", "1", { { "0.25", "25%" }, { "0.5", "50%" }, { "0.75", "75%" }, { "1", "100%" }, { "1.25", "125%" }, { "1.5", "150%" }, { "2", "200%" }, { "3", "300%" }, { "4", "400%" } } },
         { "Keyboard and mouse", "RACACIT_MOUSE_INVERT_Y", "Invert mouse Y", "0", { { "0", "Off" }, { "1", "On" } } },
+        { "Keyboard and mouse", "RACACIT_WEAPON_SCROLL", "Scroll to switch weapons", "1",
+          { { "0", "Off" }, { "1", "Mouse wheel" }, { "2", "Mouse + touchpad" } } },
+        { "Keyboard and mouse", "RACACIT_SCROLL_SENS", "Weapon scroll sensitivity", "100",
+          { { "25", "25%" }, { "50", "50%" }, { "75", "75%" }, { "100", "100%" },
+            { "125", "125%" }, { "150", "150%" }, { "175", "175%" }, { "200", "200%" } } },
         // The disc's own translations: the game picks its language from the PS3's system
         // language, which the build answers from this (game/stubs.cpp). Unset = English.
         { "Game", "RACACIT_LANGUAGE", "Language", "", { { "", "English" }, { "fr", "Français (French)" }, { "es", "Español (Spanish)" }, { "de", "Deutsch (German)" }, { "it", "Italiano (Italian)" }, { "nl", "Nederlands (Dutch)" } } },
@@ -536,10 +541,14 @@ static void add_options(const std::vector<std::string>& sections)
 {
     std::string section;
     const bool plus = ds_plus_on();
+    const bool racit = g_prof == &kRacitProfile;
+    const std::string title_id = racit ? S->game().title_id : std::string{};
+    const bool weapon_scroll = racit && (title_id.empty() || title_id == "BCUS98124");
     for (const Opt& o : opts()) {
         if (!sections.empty() && std::find(sections.begin(), sections.end(), std::string(o.section)) == sections.end()) continue;
         if (!plus && ds_plus_only(o.key)) continue;
         if (!strncmp(o.key, "NEXUS_", 6) && g_prof != &kNexusProfile) continue;   /* Into the Nexus's own */
+        if (!weapon_scroll && (!strcmp(o.key, "RACACIT_WEAPON_SCROLL") || !strcmp(o.key, "RACACIT_SCROLL_SENS"))) continue;
         if (section != o.section) {
             section = o.section; scr.items.push_back(header(section));
             if (section == "Controller") scr.items.push_back(ds_plus_item());
@@ -727,6 +736,8 @@ static void bindings_screen()
                                        "and R2)." });
     scr.info.push_back({ "When", "Changes apply the next time the game starts. Moving the mouse turns the camera "
                                  "(speed and invert in Settings). Keyboard and mouse work alongside a controller." });
+    if (g_prof == &kRacitProfile)
+        scr.info.push_back({ "Wheel bindings", "Set Scroll to switch weapons to Off to use custom wheel bindings on builds with weapon scrolling." });
     Item view; view.kind = K_OPTION; view.label = "View"; view.sub = s_bind_tab ? "By key" : "By button";
     view.change = [](int) { s_bind_tab ^= 1; set_screen(bindings_screen); };
     view.act = [] { s_bind_tab ^= 1; set_screen(bindings_screen); };
