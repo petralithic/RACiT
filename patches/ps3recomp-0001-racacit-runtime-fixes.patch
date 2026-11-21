@@ -21336,7 +21336,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b79..e78c8981 100644
+index e2687b79..4f593710 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,14 @@
@@ -21349,7 +21349,7 @@ index e2687b79..e78c8981 100644
  #define VK_NO_PROTOTYPES
  #include <vulkan/vulkan.h>
 +static unsigned s_eobj_gen;       /* any object table change can invalidate the last binding */
-+static u32 s_sampler_gen;         /* settings change or retirement of the sampler cache */
++static unsigned s_sampler_gen;    /* settings change or retirement of the sampler cache */
 +static int s_vk_foreign_bind;   /* a bind outside vk_eng_draw_batched: its reuse state is stale */
 +static unsigned long long s_vkc[8];   /* RSX_ENG_STATS: creations per window (image, memory, framebuffer, sampler, view, pipeline, buffer) */
  
