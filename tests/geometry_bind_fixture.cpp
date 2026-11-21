@@ -64,7 +64,7 @@ static void draw(Binding vertices, Binding indices, int base = 0)
     const bool gidx = indices.buffer == s_geo_heap.buf;
     const unsigned index_count = indices.buffer ? 3 : 0, vertex_count = 3;
     const VkDeviceSize ibytes = index_count * 4u;
-    struct Slot { Binding arena; } slot{{indices.buffer, 0}};
+    struct Slot { struct { VkBuffer buf; } arena; } slot{{indices.buffer}};
     auto* sl = &slot;
     s_draw_geom_vi = base != 0;
     s_draw_vofs = base;
