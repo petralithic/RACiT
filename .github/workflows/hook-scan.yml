@@ -1,0 +1,83 @@
+name: Faster lifted hook validation
+on:
+  push:
+    branches: ['ci/run/racit-hook-scan-20261121']
+permissions:
+  contents: read
+jobs:
+  hook-scan:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 4
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Compare the old and new hook scanners
+        shell: bash
+        run: |
+          python -B - <<'PYTEST'
+          import random
+          import subprocess
+          import tempfile
+          import time
+          from pathlib import Path
+
+          path = Path('scripts/check_lift_hooks.py')
+          baseline = subprocess.check_output(['git','show','a2d2ee8:scripts/check_lift_hooks.py'], encoding='utf-8')
+          scanners = []
+          for script in (baseline, path.read_text(encoding='utf-8')):
+              env = {'__file__': str(path.resolve()), '__name__': 'fixture'}
+              exec(script, env)
+              scanners.append(env)
+
+          rng = random.Random(2244)
+          tokens = ('arg_', '\\', '"', "'", '\n', '//', '/*', '*/', 'racit_', '\r', '✪')
+          for i in range(2500):
+              text = ''.join(rng.choices(tokens, k=rng.randrange(1, 210)))
+              assert scanners[0]['code_only'](text) == scanners[1]['code_only'](text), i
+
+          hooks = {'racacit_present': 1, 'racit_step': 1, 'CustomHook': 1}
+          fixture = '''
+          extern "C" void racit_step(ppu_context*);
+          void func_01234567(ppu_context* ctx) {
+                  racacit_present(ctx);
+                  // racit_step(ctx);
+                  /* racit_step(ctx); */
+                  const char* quote = "racit_step(ctx)";
+          #if 0
+                  racit_step(ctx);
+          #elif 1
+                  racit_step(ctx);
+          #else
+                  racacit_present(ctx);
+          #endif
+                  return CustomHook(ctx);
+          }
+          '''
+          padding = (('        ctx->gpr[18] = ppc_rldicl(ctx->gpr[18], 0, 32);\n'
+                      '        /* guest instruction */ ctx->ctr = (uint32_t)ctx->gpr[12];\n') * 4200)
+          with tempfile.TemporaryDirectory() as directory:
+              sources = []
+              for i in range(32):
+                  source = Path(directory, f'ppu_recomp_{i:03d}.cpp')
+                  source.write_text('void func_ABCDEF00(ppu_context* ctx) {\n' + padding +
+                                    '}\n' + (fixture if i < 12 else ''), encoding='utf-8')
+                  sources.append(source)
+              results, duration = [], []
+              for scanner in scanners:
+                  before = time.perf_counter()
+                  results.append(scanner['count_calls'](sources, hooks))
+                  duration.append(time.perf_counter() - before)
+              assert results[0] == results[1] == dict.fromkeys(hooks, 12), results
+              mib = sum(p.stat().st_size for p in sources) / (1024 * 1024)
+              print(f'Hook counts identical across {len(sources)} sources ({mib:.2f} MiB). '
+                    f'Old {duration[0]:.3f} s, new {duration[1]:.3f} s. '
+                    f'2500 lexer cases matched.')
+          PYTEST
