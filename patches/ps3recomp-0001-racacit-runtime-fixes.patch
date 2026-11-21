@@ -20177,7 +20177,7 @@ index 0000000..809a855
 +    }
 +}
 diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
-index f9725b84..f078b8cc 100644
+index f9725b84..860bea3d 100644
 --- a/libs/video/rsx_shader_spirv.cpp
 +++ b/libs/video/rsx_shader_spirv.cpp
 @@ -19,14 +19,28 @@
@@ -20237,7 +20237,7 @@ index f9725b84..f078b8cc 100644
          return -1;
      }
      glslang::TProgram program;
-@@ -122,9 +147,278 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+@@ -122,9 +147,283 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
      return 0;
  }
  
@@ -20281,10 +20281,12 @@ index f9725b84..f078b8cc 100644
 +bool s_loaded;
 +unsigned long s_hits, s_misses;
 +
++constexpr u64 kFnvPrime = 1099511628211ull;
++
 +u64 fnv(const void* p, size_t n, u64 h)
 +{
 +    const unsigned char* b = (const unsigned char*)p;
-+    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
++    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= kFnvPrime; }
 +    return h;
 +}
 +
@@ -20294,11 +20296,14 @@ index f9725b84..f078b8cc 100644
 +    Key k;
 +    k.a = fnv(kSalt, sizeof kSalt, 1469598103934665603ull);
 +    k.a = fnv(&stage, sizeof stage, k.a);
-+    k.a = fnv(hlsl, n, k.a);
-+    /* Second hash: other basis, and the text walked with its length mixed
-+     * in, so a collision needs both to agree. */
 +    k.b = fnv(&n, sizeof n, 0x84222325CBF29CE4ull ^ (u64)stage);
-+    k.b = fnv(hlsl, n, k.b);
++    /* Advance both FNV hashes in one pass. Keep each salt, stage, and length
++     * in its original position so existing on-disk keys still match. */
++    for (size_t i = 0; i < n; i++) {
++        const auto byte = static_cast<unsigned char>(hlsl[i]);
++        k.a = (k.a ^ byte) * kFnvPrime;
++        k.b = (k.b ^ byte) * kFnvPrime;
++    }
 +    k.b = fnv(kSalt, sizeof kSalt, k.b);
 +    return k;
 +}
