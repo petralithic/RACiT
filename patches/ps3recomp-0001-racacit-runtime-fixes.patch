@@ -2318,7 +2318,7 @@ index 5166a47d..4842e899 100644
                     (uint32_t)(uintptr_t)buf,
                     (unsigned long long)nbytes, (unsigned long long)bytes_read);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index f2b4c119..b447df61 100644
+index f2b4c119..bc7d1384 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -12,11 +12,13 @@
@@ -2353,7 +2353,7 @@ index f2b4c119..b447df61 100644
  }
  
  static void pad_init_backend(void)
-@@ -287,32 +293,555 @@ static u8 pad_sdl_trigger_to_u8(int raw)
+@@ -287,32 +293,568 @@ static u8 pad_sdl_trigger_to_u8(int raw)
      return (u8)val;
  }
  
@@ -2822,13 +2822,13 @@ index f2b4c119..b447df61 100644
 + * SDL's device index -- a wheel, a tablet or a virtual device at index 0 used
 + * to leave port 0 (the one the game reads) empty. A controller that goes away
 + * lets the ones after it move up, so the player always has port 0. Scanned
-+ * when the device count changes, and once a second. */
-+static void pad_sdl_attach(void)
++ * when a controller detaches, when the device count changes, and once a second. */
++static void pad_sdl_attach(int force)
 +{
 +    static int last_n = -1; static Uint64 next;
 +    const int n = SDL_NumJoysticks();
 +    const Uint64 now = SDL_GetTicks64();
-+    if (n == last_n && now < next) return;
++    if (!force && n == last_n && now < next) return;
 +    last_n = n; next = now + 1000;
 +    for (int pass = 0; pass < 2; pass++) {            /* mapped controllers first, then a generic guess */
 +        for (int d = 0; d < n; d++) {
@@ -2858,20 +2858,26 @@ index f2b4c119..b447df61 100644
 + * with the menu open is the menu's. */
 +#define PAD_SELECT_HOLD_MS 600
 +#define PAD_SELECT_TAP_MS  80
++typedef struct {
++    int state;                           /* 0 up, 1 down (undecided), 2 down (the menu's) */
++    Uint64 since, tap_until;
++} PadSelect;
++static PadSelect s_select[PAD_MAX_HOST_PORTS];
++static Uint64 s_quickselect_since;        /* primary controller only */
++
 +static int pad_select(int port, SDL_GameController* gc)
 +{
 +    const int down = SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_BACK);
-+    static int state[PAD_MAX_HOST_PORTS];             /* 0 up, 1 down (undecided), 2 down (the menu's) */
-+    static Uint64 since[PAD_MAX_HOST_PORTS], tap_until[PAD_MAX_HOST_PORTS];
++    PadSelect* select = &s_select[port];
 +    const Uint64 now = SDL_GetTicks64();
 +    if (down) {
-+        if (state[port] == 0) { state[port] = rsx_host_ui_capturing() ? 2 : 1; since[port] = now; }
-+        else if (state[port] == 1 && now - since[port] >= PAD_SELECT_HOLD_MS) { state[port] = 2; rsx_host_ui_request_menu(); }
++        if (select->state == 0) { select->state = rsx_host_ui_capturing() ? 2 : 1; select->since = now; }
++        else if (select->state == 1 && now - select->since >= PAD_SELECT_HOLD_MS) { select->state = 2; rsx_host_ui_request_menu(); }
 +    } else {
-+        if (state[port] == 1) tap_until[port] = now + PAD_SELECT_TAP_MS;
-+        state[port] = 0;
++        if (select->state == 1) select->tap_until = now + PAD_SELECT_TAP_MS;
++        select->state = 0;
 +    }
-+    return now < tap_until[port];
++    return now < select->tap_until;
 +}
 +
  static void pad_poll_sdl2(void)
@@ -2883,19 +2889,26 @@ index f2b4c119..b447df61 100644
 -            /* Try to open newly connected controllers */
 -            if (SDL_IsGameController(i)) {
 -                s_sdl_controllers[i] = SDL_GameControllerOpen(i);
-+    pad_sdl_attach();
++    int detached = 0;
 +    /* Detached controllers: closed, and the ones after them move up a port. */
 +    for (int i = 0; i < PAD_MAX_HOST_PORTS; i++)
 +        if (s_sdl_controllers[i] && !SDL_GameControllerGetAttached(s_sdl_controllers[i])) {
++            detached = 1;
 +            SDL_GameControllerClose(s_sdl_controllers[i]);
-+            s_sdl_controllers[i] = NULL;
++            if (i == 0) {
++                s_quickselect_since = 0;
++                g_racacit_ctx_quickselect = 0;
++            }
 +            for (int k = i; k + 1 < PAD_MAX_HOST_PORTS; k++) {
 +                s_sdl_controllers[k] = s_sdl_controllers[k + 1];
++                s_select[k] = s_select[k + 1];
 +                if (s_sdl_controllers[k]) pad_ds_setup(k, s_sdl_controllers[k]);
              }
 +            s_sdl_controllers[PAD_MAX_HOST_PORTS - 1] = NULL;
++            memset(&s_select[PAD_MAX_HOST_PORTS - 1], 0, sizeof(s_select[0]));
 +            i--;
          }
++    pad_sdl_attach(detached);
 +    g_racacit_pad_layout = racacit_pad_layout();
  
 +    for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
@@ -2922,7 +2935,7 @@ index f2b4c119..b447df61 100644
          if (SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_LEFTSTICK))     btns |= CELL_PAD_CTRL_L3;
          if (SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_RIGHTSTICK))    btns |= CELL_PAD_CTRL_R3;
          if (SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_START))         btns |= CELL_PAD_CTRL_START;
-@@ -332,6 +861,36 @@ static void pad_poll_sdl2(void)
+@@ -332,6 +874,42 @@ static void pad_poll_sdl2(void)
          int rt = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
          if (lt > 3000) btns |= CELL_PAD_CTRL_L2;
          if (rt > 3000) btns |= CELL_PAD_CTRL_R2;
@@ -2938,10 +2951,16 @@ index f2b4c119..b447df61 100644
 +         * game/button_prompts.cpp names the buttons in the text to match. */
 +        /* The quick select ring is open while TRIANGLE is held (the game's
 +         * default; a tap does not open it): held 150 ms = open. */
-+        if (i == 0) { static Uint64 tri_ms;
-+            if (!(btns & CELL_PAD_CTRL_TRIANGLE)) { tri_ms = 0; g_racacit_ctx_quickselect = 0; }
-+            else { const Uint64 nw = SDL_GetTicks64(); if (!tri_ms) tri_ms = nw;
-+                   g_racacit_ctx_quickselect = nw - tri_ms >= 150; } }
++        if (i == 0) {
++            if (!(btns & CELL_PAD_CTRL_TRIANGLE)) {
++                s_quickselect_since = 0;
++                g_racacit_ctx_quickselect = 0;
++            } else {
++                const Uint64 now = SDL_GetTicks64();
++                if (!s_quickselect_since) s_quickselect_since = now;
++                g_racacit_ctx_quickselect = now - s_quickselect_since >= 150;
++            }
++        }
 +        if (pad_swap(gc)) {
 +            const int l1 = (btns & CELL_PAD_CTRL_L1) != 0, l2 = (btns & CELL_PAD_CTRL_L2) != 0;
 +            const int r1 = (btns & CELL_PAD_CTRL_R1) != 0, r2 = (btns & CELL_PAD_CTRL_R2) != 0;
@@ -2959,7 +2978,7 @@ index f2b4c119..b447df61 100644
  
          s_host_state[i].buttons = btns;
  
-@@ -356,26 +915,352 @@ static void pad_poll_sdl2(void)
+@@ -356,26 +934,352 @@ static void pad_poll_sdl2(void)
          s_host_state[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
          s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
          s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
@@ -2974,7 +2993,7 @@ index f2b4c119..b447df61 100644
 +            ds5_weapon(&st[10], 3, 6, 8);
 +            ds5_send(gc, st);
 +        }
-     }
++    }
 +    pad_poll_sdl_fallbacks();
 +}
 +
@@ -3082,7 +3101,7 @@ index f2b4c119..b447df61 100644
 +            else if (*tok && SDL_strcasecmp(tok, "none")) fprintf(stderr, "[cellPad] %s: unknown key \"%s\"%c", env, tok, 10);
 +            tok = c ? c + 1 : NULL;
 +        }
-+    }
+     }
 +    if (s_kbm_on && !ignore_real) fprintf(stderr, "[cellPad] keyboard and mouse ready (click in the window for the mouse camera; Settings > Controls)%c", 10);
 +}
 +
@@ -3315,12 +3334,22 @@ index f2b4c119..b447df61 100644
 -            s_sdl_controllers[i] = SDL_GameControllerOpen(i);
 -        }
 -    }
-+    pad_sdl_attach();
++    pad_sdl_attach(1);
 +    SDL_AtomicSet(&s_racit_keyboard_prompts, s_sdl_controllers[0] == NULL);
  }
  
  static void pad_shutdown_backend(void)
-@@ -421,6 +1306,62 @@ static unsigned long long pad_now_ms(void)
+@@ -386,6 +1290,9 @@ static void pad_shutdown_backend(void)
+             s_sdl_controllers[i] = NULL;
+         }
+     }
++    memset(s_select, 0, sizeof(s_select));
++    s_quickselect_since = 0;
++    g_racacit_ctx_quickselect = 0;
+ }
+
+ #endif /* PAD_BACKEND_SDL2 */
+@@ -421,6 +1328,62 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -3383,7 +3412,7 @@ index f2b4c119..b447df61 100644
  static void pad_poll_backend(void)
  {
      /* Benign race: two threads may poll in the same tick. That costs one extra
-@@ -439,9 +1380,33 @@ static void pad_poll_backend(void)
+@@ -439,9 +1402,33 @@ static void pad_poll_backend(void)
  #elif PAD_BACKEND_SDL2
      pad_poll_sdl2();
  #endif
@@ -3418,7 +3447,7 @@ index f2b4c119..b447df61 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -466,6 +1431,14 @@ s32 cellPadInit(u32 max_connect)
+@@ -466,6 +1453,14 @@ s32 cellPadInit(u32 max_connect)
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
      memset(s_host_state, 0, sizeof(s_host_state));
@@ -3433,7 +3462,7 @@ index f2b4c119..b447df61 100644
  
      pad_init_backend();
  
-@@ -502,6 +1475,103 @@ void cellPad_poll(void)
+@@ -502,6 +1497,103 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -3537,7 +3566,7 @@ index f2b4c119..b447df61 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -518,6 +1588,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+@@ -518,6 +1610,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  
      /* Poll fresh state */
      pad_poll_backend();
@@ -3545,7 +3574,7 @@ index f2b4c119..b447df61 100644
  
      /* YDKJ_INJECT_PAD: the game's wait loop polls the pad (cellPadSetActDirect /
       * GetData) -- if it's parked on a "press button" prompt after loading, no
-@@ -601,7 +1672,7 @@ skip_inject: ;
+@@ -601,7 +1694,7 @@ skip_inject: ;
       * human at the pad. Env-gated test scaffolding, off by default. */
      { static int s_ap = -1; static unsigned s_apn = 0;
        if (s_ap < 0) s_ap = getenv("PAD_AUTOPRESS") ? 1 : 0;
@@ -3554,7 +3583,7 @@ index f2b4c119..b447df61 100644
            unsigned ph = s_apn++ % 240;
            if (ph < 12)
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= 0x40;   /* CROSS */
-@@ -636,7 +1707,7 @@ skip_inject: ;
+@@ -636,7 +1729,7 @@ skip_inject: ;
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
            }
        }
@@ -3563,7 +3592,7 @@ index f2b4c119..b447df61 100644
            double now = (double)(GetTickCount64() - t0) / 1000.0;
            /* Latch, do not window. A fixed time window is missed whenever the
             * title stops polling the pad for longer than the window (it does
-@@ -672,30 +1743,87 @@ skip_inject: ;
+@@ -672,30 +1765,87 @@ skip_inject: ;
       */
      { static int s_pf = -1; static char pf_path[512];
        static unsigned held_mask = 0; static int held_n = 0;
@@ -3662,7 +3691,7 @@ index f2b4c119..b447df61 100644
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
       * fixed positions. Rubber Ducky drives its camera from the sticks and never
-@@ -714,7 +1842,7 @@ skip_inject: ;
+@@ -714,7 +1864,7 @@ skip_inject: ;
                   sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
                   s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
                   s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
@@ -3671,7 +3700,7 @@ index f2b4c119..b447df61 100644
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
-@@ -725,7 +1853,7 @@ skip_inject: ;
+@@ -725,7 +1875,7 @@ skip_inject: ;
        { static int sw = -1; static clock_t t0 = 0;
          if (sw < 0) { const char* e = getenv("PAD_SWEEP");
                        sw = e ? atoi(e) : 0; if (sw < 0) sw = 0; }
@@ -3680,7 +3709,7 @@ index f2b4c119..b447df61 100644
              static const unsigned char steps[9][4] = {
                  {128,128,128,128},
                  {128,  0,128,128}, {128,255,128,128},
-@@ -793,10 +1921,40 @@ skip_inject: ;
+@@ -793,10 +1943,40 @@ skip_inject: ;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Y] = 399; /* gravity */
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Z] = 512;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_G] = 512;
@@ -3721,7 +3750,7 @@ index f2b4c119..b447df61 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -985,7 +2143,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -985,7 +2165,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -3730,7 +3759,7 @@ index f2b4c119..b447df61 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1082,13 +2240,61 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1082,13 +2262,61 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  #endif
  
  #if PAD_BACKEND_SDL2
