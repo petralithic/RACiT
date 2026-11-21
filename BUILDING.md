@@ -263,6 +263,9 @@ set any of `RSX_SHADER_CACHE`, `RSX_PIPELINE_CACHE`, `RSX_PIPELINE_LIST`, or
 unspecified paths unset for that run, so isolated runs stay out of your normal
 cache. An empty value also counts as an explicit setting.
 
+Set `RACACIT_WALKER_WAKE=1` to let the Linux graphics worker wake when the
+guest signals FIFO work. The default checks for graphics work every 4 ms.
+
 ### Prepare recorded shaders on desktop
 
 After playing, close the game and run its Vulkan executable with
