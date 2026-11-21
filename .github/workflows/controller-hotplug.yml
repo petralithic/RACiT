@@ -36,6 +36,37 @@ jobs:
             strip_flag=-Wl,--gc-sections
           fi
           cc -std=gnu11 -O2 -ffunction-sections -fdata-sections -Itools/ps3recomp \
+            -Itools/ps3recomp/include \
             -I"$(sdl2-config --prefix)/include" $(sdl2-config --cflags) \
             tests/controller_hotplug_fixture.c $(sdl2-config --libs) "$strip_flag" -lm -o "$RUNNER_TEMP/controller-hotplug"
           "$RUNNER_TEMP/controller-hotplug"
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Exercise the patched Windows SDL pad backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q ziglang==0.16.0
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          curl --fail --silent --show-error --location \
+            https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-mingw.tar.gz \
+            --output sdl2-win.tar.gz
+          tar -xzf sdl2-win.tar.gz
+          sdl="$PWD/SDL2-2.32.10/x86_64-w64-mingw32"
+          python -m ziglang cc -target x86_64-windows-gnu -std=gnu11 -O2 -ffunction-sections -fdata-sections \
+            -DPS3RECOMP_PAD_USE_SDL2 -Itools/ps3recomp -Itools/ps3recomp/include -I"$sdl/include" \
+            tests/controller_hotplug_fixture.c -L"$sdl/lib" -lSDL2 -Wl,--gc-sections -o controller-hotplug.exe
+          cp "$sdl/bin/SDL2.dll" .
+          ./controller-hotplug.exe
