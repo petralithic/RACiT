@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
         generator = ["-G", "Ninja", f"-DCMAKE_TOOLCHAIN_FILE={root / 'windows/toolchain/zig-windows.cmake'}"]
         executable = scratch / "build/path_probe.exe"
     else:
-        generator = ["-G", "Visual Studio 17 2022", "-A", "x64"]
+        generator = ["-A", "x64"]
         executable = scratch / "build/Release/path_probe.exe"
     subprocess.run(["cmake", "-S", str(scratch), "-B", str(scratch / "build"), *generator],
                    env=env, check=True)
