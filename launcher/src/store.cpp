@@ -366,10 +366,11 @@ std::string Store::import_iso(const fs::path& iso, Progress* p, std::string* sum
 
 static const char* kElf120 = "dd304912f85cb9afc344f4a0d4e071d05a08b2af8de216d458b26060417549ad";
 
-std::string Store::check_elf(const fs::path& elf, bool* known, int* version)
+std::string Store::check_elf(const fs::path& elf, bool* known, int* version, std::string* title_id)
 {
     *known = false;
     if (version) *version = 0;
+    if (title_id) title_id->clear();
     const std::string h = read_text(elf, 64);
     if (h.size() >= 4 && h.compare(0, 4, std::string("SCE\0", 4)) == 0)
         return "This is the locked EBOOT.BIN (or a copy of it). Unlock it with RPCS3 first: Utilities > Decrypt PS3 Binaries.";
@@ -377,10 +378,28 @@ std::string Store::check_elf(const fs::path& elf, bool* known, int* version)
     if (h[4] != 2 || h[5] != 2 || (unsigned char)h[18] != 0 || (unsigned char)h[19] != 0x15) return u8(elf.filename()) + " is not a PS3 program.";
     const std::string sum = sha256_file(elf);
     int v = 0;
-    for (auto& d : g_prof->discs) if (sum == d.elf_sha256) v = 100;
-    if (sum == kElf120) v = 120;   // update 1.20 (USA): builds\vNN-u120
+    if (sum == kElf120) {
+        v = 120;
+        if (title_id) *title_id = "BCUS98124";
+    } else {
+        for (const GameDisc& disc : g_prof->discs)
+            if (sum == disc.elf_sha256) {
+                v = 100;
+                if (title_id) *title_id = disc.id;
+                break;
+            }
+    }
     *known = v != 0;
     if (version) *version = v;
+    return {};
+}
+
+static std::string disc_elf_mismatch(const std::string& disc_id, int version, const std::string& elf_id)
+{
+    if (version == 120)
+        return "This is update 1.20's EBOOT.elf. Add it through setup for the update and use the disc's EBOOT.elf to play 1.00.";
+    if (!disc_id.empty() && !elf_id.empty() && disc_id != elf_id)
+        return "This EBOOT.elf is for " + elf_id + ". Choose the EBOOT.elf from your " + disc_id + " disc.";
     return {};
 }
 
@@ -388,7 +407,8 @@ std::string Store::add_elf(const fs::path& elf)
 {
     bool known = false;
     int v = 0;
-    std::string r = check_elf(elf, &known, &v);
+    std::string title_id;
+    std::string r = check_elf(elf, &known, &v, &title_id);
     if (!r.empty()) return r;
     std::error_code ec;
     if (v == 120) {   // update 1.20's: beside the update's files, the disc's EBOOT.elf stays
@@ -400,6 +420,8 @@ std::string Store::add_elf(const fs::path& elf)
         return {};
     }
     const GameInfo g = game();
+    r = disc_elf_mismatch(g.title_id, v, title_id);
+    if (!r.empty()) return r;
     const bool have_game = fs::is_directory(g.root / L"PS3_GAME", ec);
     const fs::path to = have_game ? g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf" : pending_elf();
     if (!(fs::exists(to, ec) && fs::equivalent(elf, to, ec))) {
@@ -1793,10 +1815,19 @@ std::string Store::launch(void** process, bool prepare)
     const bool u120 = plays_update(g.title_id);
     const BuildInfo b = build_for(u120, g.title_id);
     if (!b.version) return "No build installed: reinstall the launcher.";
+    const fs::path eboot = u120 ? update_elf() : g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf";
+    if (!u120) {
+        bool known = false;
+        int version = 0;
+        std::string title_id;
+        const std::string error = check_elf(eboot, &known, &version, &title_id);
+        if (!error.empty()) return error;
+        const std::string mismatch = disc_elf_mismatch(g.title_id, version, title_id);
+        if (!mismatch.empty()) return mismatch;
+    }
     std::error_code ec;
     fs::create_directories(hdd(), ec); fs::create_directories(cache(), ec);
     if (u120) { const std::string r = prepare_update_hdd(); if (!r.empty()) return "Could not set up update 1.20: " + r; }
-    const fs::path eboot = u120 ? update_elf() : g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf";
     seed_caches(b);   // a prepare too: a new build's shipped pipelines are then built as well
     if (!prepare && ini.get("backup_on_play", "1") != "0") {
         /* A backup that cannot be made must not keep the game from starting

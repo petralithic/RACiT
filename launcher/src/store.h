@@ -128,9 +128,10 @@ public:
     std::string import_iso(const fs::path& iso, Progress* p, std::string* summary);
     // EBOOT.elf, the game's main program unlocked with RPCS3: checked, then put in
     // PS3_GAME\USRDIR -- or kept in data\ until the game is imported.
-    // check_elf: "" = a PS3 program; *known = one a build is made from: the USA disc's
-    // (*version 100) or update 1.20's (*version 120), told apart by SHA-256.
-    static std::string check_elf(const fs::path& elf, bool* known, int* version = nullptr);
+    // check_elf: "" = a PS3 program; *known = one a build is made from. SHA-256
+    // identifies the disc's title ID and version 100, or the USA update's version 120.
+    static std::string check_elf(const fs::path& elf, bool* known, int* version = nullptr,
+                                 std::string* title_id = nullptr);
     // A 1.20 EBOOT.elf goes to update\EBOOT.elf instead; the disc's stays where it is.
     std::string add_elf(const fs::path& elf);
     fs::path pending_elf() const { return data() / L"EBOOT.elf"; }

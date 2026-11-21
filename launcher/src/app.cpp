@@ -439,9 +439,9 @@ static void import_screen()
                                "A dumped game, played where it is; its EBOOT.elf is found by itself", [] {
         const fs::path p = pick_folder(g_hwnd, L"Pick your game's USRDIR folder (in PS3_GAME)");
         if (p.empty()) return;
-        const std::string r = S->use_game_in_place(p);
+        std::string r = S->use_game_in_place(p);
         std::error_code ec;
-        if (r.empty() && !S->game().ok && fs::exists(S->pending_elf(), ec)) S->add_elf(S->pending_elf());
+        if (r.empty() && !S->game().ok && fs::exists(S->pending_elf(), ec)) r = S->add_elf(S->pending_elf());
         const GameInfo g = S->game();
         if (!r.empty()) message("Game folder", r);
         else if (g.ok) { message("Ready to play", "Found your game and its EBOOT.elf. Press Play."); set_screen(home); return; }
