@@ -37,9 +37,9 @@ jobs:
               $0 ~ start { emit=1 } emit { print } END { if (!ok) exit 1 }' "$audio/cellAudio.c"
           }
           extract '^static atomic_int +s_mix_thread_running' '^static mutex_t +s_audio_mutex' > mixer_state.inc
-          extract '^static SDL_AudioDeviceID s_sdl_audio_dev' '^/\* One biquad' > device_state.inc
+          extract '^static SDL_AudioDeviceID s_sdl_audio_dev' '^/[*] One biquad' > device_state.inc
           extract '^static int audio_backend_init' '^static void audio_backend_submit' >> device_state.inc
-          extract '^static int audio_start_mix_thread' '^/\* ---' > mixer_lifecycle.inc
+          extract '^static int audio_start_mix_thread' '^/[*] ---' > mixer_lifecycle.inc
           flags=(-pthread -lm)
           if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
           clang -std=c17 -I. -I"$audio" "$root/tests/dualsense_shutdown_fixture.c" "$audio/ds_player.c" "${flags[@]}" -o check.exe
