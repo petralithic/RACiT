@@ -43,12 +43,13 @@ jobs:
             version.lib winmm.lib gdi32.lib user32.lib advapi32.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Copy-Item "sdl/SDL2-$v/lib/x64/SDL2.dll" launcher/build/
-      - name: The launcher starts (--self-test)
+      - name: Replay the wheel controls and verify their Play settings
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "launcher/build/RaCACiT Launcher.exe" -ArgumentList '--self-test' -PassThru -Wait
-          "self-test exit code: $($p.ExitCode)"
-          exit $p.ExitCode
+          rustc --edition=2024 .github/tests/launcher_wheel.rs -o launcher-wheel-check.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./launcher-wheel-check.exe 'launcher/build/RaCACiT Launcher.exe'
+          exit $LASTEXITCODE
 
   macos:
     runs-on: macos-15
@@ -62,3 +63,8 @@ jobs:
       - name: Build and self-test the desktop launcher
         shell: bash
         run: bash mac/build_launcher.sh
+      - name: Replay the wheel controls and verify their Play settings
+        shell: bash
+        run: |
+          rustc --edition=2024 .github/tests/launcher_wheel.rs -o launcher-wheel-check
+          ./launcher-wheel-check 'launcher/build/RaCACiT Launcher.app/Contents/MacOS/RaCACiT Launcher'
