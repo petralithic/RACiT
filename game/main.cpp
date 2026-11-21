@@ -1591,22 +1591,29 @@ extern "C" int racacit_entry(void)
 #endif
 
 #if defined(__linux__) && !defined(__ANDROID__)
+namespace fs = std::filesystem;
+
+static fs::path linux_user_directory(const char* name, const char* fallback)
+{
+    const char* value = getenv(name);
+    fs::path dir = value ? fs::path(value) : fs::path();
+    if (!dir.is_absolute()) {
+        const char* home = getenv("HOME");
+        if (!home || !*home) return {};
+        dir = fs::path(home) / fallback;
+    }
+    return dir / "racit";
+}
+
 static void linux_load_settings()
 {
-    namespace fs = std::filesystem;
     fs::path path;
     if (const char* file = getenv("RACACIT_SETTINGS_FILE")) {
         if (!*file) return;
         path = file;
     } else {
-        const char* config = getenv("XDG_CONFIG_HOME");
-        fs::path dir = config ? fs::path(config) : fs::path();
-        if (!dir.is_absolute()) {
-            const char* home = getenv("HOME");
-            if (!home || !*home) return;
-            dir = fs::path(home) / ".config";
-        }
-        dir /= "racit";
+        const fs::path dir = linux_user_directory("XDG_CONFIG_HOME", ".config");
+        if (dir.empty()) return;
         std::error_code error;
         fs::create_directories(dir, error);
         if (error) return;
@@ -1624,12 +1631,41 @@ static void linux_load_settings()
         setenv(line.c_str(), line.c_str() + separator + 1, 0);
     }
 }
+
+#if defined(RACACIT_HAVE_VULKAN)
+static void linux_configure_shader_cache()
+{
+    static const struct { const char* key; const char* file; } cache_files[] = {
+        { "RSX_SHADER_CACHE", "shadercache.bin" },
+        { "RSX_PIPELINE_CACHE", "pipelinecache.bin" },
+        { "RSX_PIPELINE_LIST", "pipelinelist.bin" },
+        { "RSX_PROGRAM_LIST", "programlist.bin" },
+    };
+    // Callers that specify cache paths own the whole set. In particular, a test
+    // using a private cache must never open the player's program list.
+    for (const auto& entry : cache_files)
+        if (getenv(entry.key)) return;
+
+    const char* backend = getenv("RACACIT_RSX");
+    if (backend && strcmp(backend, "null") == 0) return;
+    const fs::path dir = linux_user_directory("XDG_CACHE_HOME", ".cache");
+    if (dir.empty()) return;
+    std::error_code error;
+    fs::create_directories(dir, error);
+    if (error) return;
+    for (const auto& entry : cache_files)
+        setenv(entry.key, (dir / entry.file).c_str(), 0);
+}
+#endif
 #endif
 
 int main(int argc, char** argv)
 {
 #if defined(__linux__) && !defined(__ANDROID__)
     linux_load_settings();
+#if defined(RACACIT_HAVE_VULKAN)
+    linux_configure_shader_cache();
+#endif
 #endif
 #if defined(__APPLE__) && defined(RACACIT_HAVE_VULKAN)
     /* Preserve IEEE shader guards before SDL or the Vulkan loader starts.

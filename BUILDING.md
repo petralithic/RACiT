@@ -242,6 +242,14 @@ file, or set it to an empty value to disable settings persistence for that run. 
 loads `RACACIT_` settings, including key bindings and mouse sensitivity. Explicit
 environment values take precedence.
 
+Both Linux Vulkan builds keep translated shaders, driver pipelines, and the
+recorded programs and pipelines in `$XDG_CACHE_HOME/racit` (`~/.cache/racit`
+by default). They share these files across disc and update launches. If you
+set any of `RSX_SHADER_CACHE`, `RSX_PIPELINE_CACHE`, `RSX_PIPELINE_LIST`, or
+`RSX_PROGRAM_LIST`, supply all the paths you want to use. The game leaves
+unspecified paths unset for that run, so isolated runs stay out of your normal
+cache. An empty value also counts as an explicit setting.
+
 ## Keyboard menu artwork
 
 Prepare a separate archive from your own game dump with `python scripts/prepare_menu_keycaps.py ORIGINAL_GLOBAL_CACHED.PSARC PREPARED_GLOBAL_CACHED.PSARC`. The output directory must exist. The tool checks the bundled menu source and compiled actions, preserves the original archive, and records a receipt beside the prepared file. Repeating the command verifies and reuses the matching output. A changed input or output requires a fresh output path.
