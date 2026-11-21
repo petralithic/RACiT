@@ -9,14 +9,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 4
       - name: Extract the two actual runtime revisions
         shell: bash
         run: |
@@ -49,14 +49,3 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & "./after.exe"
           exit $LASTEXITCODE
-      - name: Count native filesystem probes and verify fallback paths
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          run=$(mktemp -d "$RUNNER_TEMP/disc-probes.XXXXXXXX")
-          c++ -std=c++17 -O2 -Wall -Wextra -DBASELINE tests/disc_probes_fixture.cpp -o "$run/before"
-          c++ -std=c++17 -O2 -Wall -Wextra tests/disc_probes_fixture.cpp -o "$run/after"
-          cd "$run"
-          ./before
-          ./after

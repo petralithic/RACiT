@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <sys/stat.h>
 
 namespace fs = std::filesystem;
