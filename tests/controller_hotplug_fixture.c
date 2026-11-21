@@ -11,6 +11,22 @@ static int settings_requests;
 int rsx_host_ui_capturing(void) { return 0; }
 void rsx_host_ui_request_menu(void) { ++settings_requests; }
 void rsx_host_ui_options(rsx_host_options* options) { memset(options, 0, sizeof(*options)); }
+#ifdef _WIN32
+/* COFF resolves references from the unused guest/report functions before stripping them. */
+uint8_t* vm_base;
+int g_resv_store_active;
+uint32_t g_ww_lo, g_ww_hi;
+volatile int g_racacit_kbm_on, g_racacit_ds_haptics, g_racacit_rumble_lg, g_racacit_rumble_sm;
+volatile unsigned long long g_racacit_rumble_ms;
+unsigned long long ps3_qpc_us(void) { abort(); }
+void ps3_ww_report_inline(uint32_t address, uint64_t value, int width) { abort(); }
+void ppu_resv_break_store(uint64_t address) { abort(); }
+int spu_coh_is_reserved(uint32_t address) { abort(); }
+void spu_lockline_lock(void) { abort(); }
+void spu_lockline_unlock(void) { abort(); }
+void spu_coh_notify_write(uint32_t address) { abort(); }
+void rsx_host_ui_poll_script(void) { abort(); }
+#endif
 int touch_controls_active(void) { return 0; }
 void touch_controls_set_gamepad(int connected) { (void)connected; }
 int touch_controls_poll(float aspect, uint16_t* buttons, uint8_t* lx, uint8_t* ly,
