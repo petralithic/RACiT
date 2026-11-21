@@ -1,0 +1,125 @@
+name: Vulkan descriptor resource reuse
+on:
+  push:
+    branches: ['ci/run/racit-descriptor-reuse-20261121']
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Vulkan and SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev libsdl2-dev
+      - name: Check the patched Vulkan renderer source
+        run: |
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          cc -std=gnu17 -DPS3RECOMP_RSX_VULKAN -Itools/ps3recomp/include -fsyntax-only tools/ps3recomp/libs/video/rsx_vulkan_backend.c
+      - name: Verify resource-specific descriptor reuse and invalidation
+        run: |
+          python3 -B - <<'PYTEST'
+          from pathlib import Path
+          src = Path('tools/ps3recomp/libs/video/rsx_vulkan_backend.c').read_text()
+          def take(first, last):
+              start = src.index(first)
+              return src[start:src.index(last, start)]
+          lookup = take('#define VK_SETC', 'static int s_draw_geom_vi')
+          retire = take('static void vk_eng_retire_samplers(void)', 'static void vk_apply_filter_options(const rsx_host_options* o)\n{')
+          Path('descriptor-check.c').write_text(r'''
+          #include <assert.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <vulkan/vulkan.h>
+          typedef uint32_t u32;
+          typedef uint64_t u64;
+          #define RSX_MAX_TEXTURES 16
+          static struct { VkDevice device; } s_vk;
+          static struct { VkDescriptorSetLayout set_layout; } s_g;
+          typedef struct { VkDescriptorPool pool; struct { VkBuffer buf; } arena; } vk_bt_slot;
+          static struct { u32 epoch; } s_bt = {1};
+          static struct { u32 tex_mask, tex_dirty, tex[16], samp[16][5]; } s_e2;
+          static u32 s_eobj_gen, s_sampler_gen, s_esamp_count, allocations, writes, retired, deferred, destroyed;
+          static int rollover_in_write;
+          static VkImageView views[3];
+          static struct { VkSampler s; } s_esamp[4];
+          static u32 s_esamp_hash[8];
+          static VkImageView vk_eng_sample_view(u32 handle) { return views[handle]; }
+          static VkResult pvkAllocateDescriptorSets(VkDevice dev, const VkDescriptorSetAllocateInfo* info,
+                                                   VkDescriptorSet* out)
+          {
+              (void)dev;
+              assert(info->descriptorSetCount == 1);
+              *out = (VkDescriptorSet)(uintptr_t)++allocations;
+              return VK_SUCCESS;
+          }
+          static int vk_bt_push(int kind, uint64_t object, uint64_t b, uint64_t c)
+          {
+              assert(kind == 6 && b == 0 && c == 0 && object);
+              deferred++;
+              return 1;
+          }
+          static void pvkDestroySampler(VkDevice d, VkSampler sampler, const VkAllocationCallbacks* callbacks)
+          { (void)d; (void)sampler; (void)callbacks; destroyed++; }
+          ''' + retire + r'''
+          static void vk_eng_write_descriptors_to(VkDescriptorSet set, const VkDescriptorBufferInfo bi[2])
+          {
+              assert(set && bi[0].range && bi[1].range);
+              writes++;
+              if (rollover_in_write) {
+                  rollover_in_write = 0;
+                  vk_eng_retire_samplers();
+                  retired++;
+              }
+          }
+          ''' + lookup + r'''
+          int main(void)
+          {
+              vk_bt_slot slot = {0};
+              s_e2.tex_mask = 1; s_e2.tex[0] = 1;
+              views[1] = (VkImageView)(uintptr_t)100;
+              VkDescriptorSet first = vk_eng_set_for(&slot, 16, 32, s_sampler_gen);
+              for (u32 i = 1; i <= 100; ++i) {
+                  s_eobj_gen++;
+                  views[2] = (VkImageView)(uintptr_t)(200 + i);
+                  assert(vk_eng_set_for(&slot, 16, 32, s_sampler_gen) == first);
+              }
+              assert(allocations == 1 && writes == 1);
+              views[1] = (VkImageView)(uintptr_t)101;
+              const VkDescriptorSet changed_view = vk_eng_set_for(&slot, 16, 32, s_sampler_gen);
+              assert(changed_view != first && allocations == 2);
+              views[1] = VK_NULL_HANDLE;
+              const VkDescriptorSet removed_view = vk_eng_set_for(&slot, 16, 32, s_sampler_gen);
+              assert(removed_view != changed_view && allocations == 3);
+
+              s_esamp[0].s = (VkSampler)(uintptr_t)42;
+              s_esamp_count = 1;
+              s_esamp_hash[2] = 1;
+              vk_eng_retire_samplers();
+              assert(deferred == 1 && destroyed == 0 && !s_esamp_count && !s_esamp_hash[2] && s_e2.tex_dirty);
+              const VkDescriptorSet after_retire = vk_eng_set_for(&slot, 16, 32, s_sampler_gen);
+              assert(after_retire != removed_view && allocations == 4);
+
+              rollover_in_write = 1;
+              u32 old_gen = s_sampler_gen;
+              VkDescriptorSet during_rollover = vk_eng_set_for(&slot, 32, 32, old_gen);
+              assert(retired == 1 && old_gen != s_sampler_gen && allocations == 5);
+              assert(vk_eng_set_for(&slot, 32, 32, old_gen) != during_rollover);
+              VkDescriptorSet new_generation = vk_eng_set_for(&slot, 32, 32, s_sampler_gen);
+              assert(new_generation != during_rollover && allocations == 7);
+              s_bt.epoch++;
+              assert(vk_eng_set_for(&slot, 32, 32, s_sampler_gen) != new_generation && allocations == 8);
+              puts("One descriptor set and one write survived 100 unrelated allocations. View replacement, release, sampler retirement, rollover and a new batch invalidated reuse.");
+          }
+          ''')
+          PYTEST
+          cc -std=gnu17 -O2 descriptor-check.c -o descriptor-check
+          ./descriptor-check
