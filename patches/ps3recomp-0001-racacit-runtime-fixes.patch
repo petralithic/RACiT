@@ -17447,7 +17447,7 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..d2f24665
+index 00000000..49b1ca0e
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
 @@ -0,0 +1,2420 @@
@@ -18415,15 +18415,15 @@ index 00000000..d2f24665
 +    if (s_weapon_scroll_supported && s_opt.kbm && s_opt.weapon_scroll &&
 +        !s_open && !s_sv_active) {
 +#if SDL_VERSION_ATLEAST(2, 0, 18)
-+        const float y = event->preciseY;
++        const float x = event->preciseX, y = event->preciseY;
 +#else
-+        const float y = event->y;
++        const float x = event->x, y = event->y;
 +#endif
 +        const Uint64 now = SDL_GetTicks64();
 +        /* Only unlabeled smooth scrolling needs a grace period for integral
 +         * samples. Keep the grace period with the device that produced them. */
 +        const int touch = event->which == SDL_TOUCH_MOUSEID;
-+        if (!touch && y != truncf(y)) {
++        if (!touch && (x != truncf(x) || y != truncf(y))) {
 +            s_smooth_mouse = event->which;
 +            s_smooth_until = now + 180;
 +        }
