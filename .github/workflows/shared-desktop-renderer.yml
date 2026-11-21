@@ -33,6 +33,95 @@ jobs:
           grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
           cmake --build build/runtime --target ps3recomp_runtime --parallel 2
 
+      - name: Verify sparse texture slot visits and descriptor keys
+        run: |
+          python3 -B - <<'PYTEST'
+          from pathlib import Path
+          src = Path('tools/ps3recomp/libs/video/rsx_vulkan_backend.c').read_text()
+
+          def take(text, first, last):
+              start = text.index(first)
+              return text[start:text.index(last, start)]
+
+          bind = take(src, 'static void vk_eng_bind_textures(', 'static void vk_eng_bind_vertex_textures(')
+          sparse = take(bind, '    /* Include the previous mask', '        const int on')
+          ref = bind.replace('vk_eng_bind_textures(', 'reference_bind(').replace(
+              sparse, '    for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {\n')
+          counted = bind.replace('vk_eng_bind_textures(', 'count_bind(').replace(
+              '        const int on = ', '        ++visits;\n        const int on = ', 1)
+          lookup = src[src.index('static VkDescriptorSet vk_eng_set_for('):]
+          key = take(lookup, '    u64 h =', '    h |= 1u;')
+          sparse_key = take(key, '    u32 units =', '        VK_MIX(s_e2.tex[u]);')
+          ref_key = key.replace(sparse_key, '    for (u32 u = 0; u < RSX_MAX_TEXTURES; u++) {\n'
+                                            '        if (!((s_e2.tex_mask >> u) & 1u)) continue;\n')
+
+          def hash_function(name, code):
+              return f'static u64 {name}(u32 vsb, u32 psb)\n{{\n{code}    return h;\n}}\n'
+
+          header = r'''
+          #include <assert.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <string.h>
+          typedef uint32_t u32;
+          typedef uint64_t u64;
+          #define RSX_BE_MAX_TEXTURES 16
+          #define RSX_MAX_TEXTURES 16
+          #define VK_ENG_MAX_OBJ 97
+          typedef struct { u32 vals[6]; } rsx_be_sampler_desc;
+          typedef struct {
+              u32 tex_mask, tex_dirty;
+              u32 tex[16]; rsx_be_sampler_desc samp[16];
+          } state;
+          static state s_e2, reference, actual;
+          static struct { int lazy; } s_eobj[VK_ENG_MAX_OBJ];
+          static u32 s_eobj_gen, visits, lazy_path;
+          static int vk_eng_color_back(void* object)
+          { (void)object; lazy_path++; return 1; }
+          '''
+          body = r'''
+          int main(void)
+          {
+              u32 textures[16];
+              rsx_be_sampler_desc samplers[16];
+              for (u32 j = 1; j < VK_ENG_MAX_OBJ; j++) s_eobj[j].lazy = (j % 5u) == 0;
+              for (u32 i = 0; i < 65536u; i++) {
+                  const u32 mask = ((i * 129u + 13u) & 65535u) | ((i & 1u) << 26);
+                  for (u32 t = 0; t < 16; t++) {
+                      textures[t] = (i + t * 31u) % 101u;
+                      for (u32 k = 0; k < 6; k++) samplers[t].vals[k] = (i / 5u) ^ (31u * t + k);
+                  }
+                  const rsx_be_sampler_desc* opts = i % 11u ? samplers : NULL;
+                  reference.tex_dirty = actual.tex_dirty = 0;
+                  s_e2 = reference;
+                  lazy_path = 0;
+                  reference_bind(NULL, textures, opts, mask);
+                  reference = s_e2;
+                  const u32 expected_lazy = lazy_path;
+                  s_e2 = actual;
+                  lazy_path = 0;
+                  vk_eng_bind_textures(NULL, textures, opts, mask);
+                  actual = s_e2;
+                  assert(memcmp(&actual, &reference, sizeof actual) == 0);
+                  assert(lazy_path == expected_lazy);
+                  s_eobj_gen = i;
+                  assert(candidate_key(16, 32) == reference_key(16, 32));
+              }
+              s_e2 = (state){0};
+              visits = 0;
+              count_bind(NULL, textures, NULL, 1u << 15);
+              assert(visits == 1);
+              count_bind(NULL, NULL, NULL, 0);
+              assert(visits == 2 && !s_e2.tex[15]);
+              puts("Binding state and descriptor keys matched across all 65536 masks. A single active slot required one iteration.");
+          }
+          '''
+          Path('build/texture-slot-check.c').write_text(header + bind + ref + counted +
+              hash_function('candidate_key', key) + hash_function('reference_key', ref_key) + body)
+          PYTEST
+          cc -std=c11 -O2 build/texture-slot-check.c -o build/texture-slot-check
+          build/texture-slot-check
+
   windows-runtime:
     runs-on: windows-latest
     timeout-minutes: 30
