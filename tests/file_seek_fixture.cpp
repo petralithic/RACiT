@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <stdexcept>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
