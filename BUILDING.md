@@ -266,6 +266,33 @@ cache. An empty value also counts as an explicit setting.
 Set `RACACIT_WALKER_WAKE=1` to let the Linux graphics worker wake when the
 guest signals FIFO work. The default checks for graphics work every 4 ms.
 
+### Reuse compiler objects between the disc and update builds
+
+With sccache 0.19 and Clang, the two build directories can share cached C
+objects for matching generated SPU code. Use a local cache for both builds
+and set its options before its server starts. From the repository root on
+macOS or Linux:
+
+```bash
+export SCCACHE_BASEDIRS="$(pwd -P)/game:$(pwd -P)/out/BCUS98124-1.20"
+export SCCACHE_DIRECT=false
+export CMAKE_C_COMPILER_LAUNCHER=sccache
+```
+
+Use the normal disc and update commands with separate build directories.
+For an existing CMake build directory, pass
+`-DCMAKE_C_COMPILER_LAUNCHER=sccache` when configuring it. For an external
+lift directory, use the actual source roots. On Windows use a semicolon
+between the roots. This setup was checked with native Clang. Windows release
+builds using Zig still need their own check.
+
+Keep `SCCACHE_DIRECT=false` for this use. The direct lookup can reuse a
+preprocessing result whose dependencies point into the other version's
+tree. With direct lookup disabled, the compiler preprocesses each version's
+own sources and headers before attempting to reuse an object. Separate build
+directories retain each version's generated registration tables and links.
+Check the reported hit count after the second build to measure actual reuse.
+
 ### Prepare recorded shaders on desktop
 
 After playing, close the game and run its Vulkan executable with
