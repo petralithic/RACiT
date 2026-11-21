@@ -294,7 +294,7 @@ if(RACACIT_CHECK_HOOKS)
     message(STATUS "Lift hooks:      ${_racit_profile} (versions/${_racit_profile}-hook-symbols.txt)")
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     set(_racit_root "${CMAKE_CURRENT_SOURCE_DIR}/..")
-    file(GLOB _racit_hook_inputs
+    file(GLOB _racit_hook_inputs LIST_DIRECTORIES FALSE
         "${_racit_root}/scripts/patch_lift.py" "${_racit_root}/scripts/update120_hooks.py"
         "${_racit_root}/scripts/fix_vmx_alias.py" "${_racit_root}/scripts/game_version.py"
         "${_racit_root}/scripts/check_lift_hooks.py" "${_racit_root}/versions/*")
@@ -303,17 +303,43 @@ if(RACACIT_CHECK_HOOKS)
     # or a hook list configures (and so re-patches) again.
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_racit_hook_inputs})
     set(_racit_configured "${CMAKE_CURRENT_BINARY_DIR}/lift-configured.ok")
+    set(_racit_patched "${CMAKE_CURRENT_BINARY_DIR}/lift-patched.ok")
+    set(_racit_verified "${CMAKE_CURRENT_BINARY_DIR}/lift-configured.sha256")
+    function(_racit_lift_digest output)
+        set(material "${_racit_profile}\n${RECOMP_DIR}\n${_racit_elf}\n${Python3_EXECUTABLE}\n")
+        foreach(input IN LISTS _racit_hook_inputs RECOMP_SOURCES)
+            file(SHA256 "${input}" digest)
+            string(APPEND material "${input}=${digest}\n")
+        endforeach()
+        string(SHA256 digest "${material}")
+        set(${output} "${digest}" PARENT_SCOPE)
+    endfunction()
     # Publish the check's start time only on success. A source changed even
     # during this check is still newer than its proof and is checked at build time.
     file(TOUCH "${_racit_configured}.pending")
-    execute_process(
-        COMMAND "${Python3_EXECUTABLE}" -I -X utf8 "${_racit_root}/scripts/check_lift_hooks.py" "${RECOMP_DIR}"
-                --profile "${_racit_profile}" --elf "${_racit_elf}" --patch
-                --stamp "${CMAKE_CURRENT_BINARY_DIR}/lift-patched.ok"
-        RESULT_VARIABLE _racit_patch_result)
-    if(NOT _racit_patch_result STREQUAL "0")
-        file(REMOVE "${_racit_configured}.pending")
-        message(FATAL_ERROR "The lift in ${RECOMP_DIR} is missing hooks (see above)")
+    _racit_lift_digest(_racit_digest)
+    set(_racit_previous "")
+    if(EXISTS "${_racit_verified}" AND EXISTS "${_racit_patched}")
+        file(READ "${_racit_verified}" _racit_previous)
+    endif()
+    if(_racit_digest STREQUAL _racit_previous)
+        message(STATUS "Lift hooks:      unchanged since verification")
+    else()
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -I -X utf8 "${_racit_root}/scripts/check_lift_hooks.py" "${RECOMP_DIR}"
+                    --profile "${_racit_profile}" --elf "${_racit_elf}" --patch --stamp "${_racit_patched}"
+            RESULT_VARIABLE _racit_patch_result)
+        if(NOT _racit_patch_result STREQUAL "0")
+            file(REMOVE "${_racit_configured}.pending")
+            message(FATAL_ERROR "The lift in ${RECOMP_DIR} is missing hooks (see above)")
+        endif()
+        # The patcher may rewrite the sources. Only reuse a digest from a
+        # check whose inputs stayed unchanged from start to finish.
+        _racit_lift_digest(_racit_checked_digest)
+        if(_racit_digest STREQUAL _racit_checked_digest)
+            file(WRITE "${_racit_verified}.pending" "${_racit_digest}")
+            file(RENAME "${_racit_verified}.pending" "${_racit_verified}")
+        endif()
     endif()
     file(RENAME "${_racit_configured}.pending" "${_racit_configured}")
     # The build reuses the configuration check when the input timestamps allow it.
