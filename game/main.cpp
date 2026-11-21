@@ -319,6 +319,9 @@ static unsigned long long s_rt_present_us;
 extern "C" void ps3_tl_at(unsigned long long t, char ev, uint32_t a, uint32_t b);
 extern "C" void ps3_tl(char ev, uint32_t a, uint32_t b);
 extern "C" unsigned long long ps3_qpc_us(void);
+#ifdef RACACIT_RECORD_FRAME_INTERVALS
+extern "C" void racit_record_present(void);
+#endif
 static void present_guest_frame(void)
 {
     unsigned long long _t = rt_now_us();
@@ -330,6 +333,9 @@ static void present_guest_frame(void)
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     InterlockedIncrement(&g_frames_presented);
     racit_mods_frame();   /* code mods' frame/level events (mods.cpp) */
+#ifdef RACACIT_RECORD_FRAME_INTERVALS
+    racit_record_present();
+#endif
 }
 
 /* The FIFO walker runs on frame_clock. A guest thread that has just moved

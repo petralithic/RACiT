@@ -246,6 +246,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+option(RACACIT_RECORD_FRAME_INTERVALS "Build the local guest-frame timing hook" OFF)
+if(RACACIT_RECORD_FRAME_INTERVALS)
+    target_sources(${PROJECT_NAME} PRIVATE racit-present-times.cpp)
+    set_property(SOURCE "${HOST_DIR}/main.cpp" APPEND PROPERTY
+        COMPILE_DEFINITIONS RACACIT_RECORD_FRAME_INTERVALS=1)
+endif()
 # Every hook on the lift. The lift is generated once and patched by
 # scripts/patch_lift.py, so a lift patched before a hook was added would build
 # without it. Before the game compiles, scripts/check_lift_hooks.py re-runs the
