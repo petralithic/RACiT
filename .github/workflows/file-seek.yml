@@ -1,0 +1,62 @@
+name: Desktop file seek
+on:
+  push:
+    branches: ['ci/run/racit-file-seek-20261121']
+permissions:
+  contents: read
+jobs:
+  seek:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Prepare the patched runtime and select its file entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace --include=libs/filesystem/cellFs.c \
+            --include=runtime/syscalls/sys_fs.c --include=runtime/ppu/ppu_fs.cpp \
+            --include=runtime/platform/host_fs_seek.h ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          extract() {
+            awk -v signature="$1" 'index($0,signature)==1 {emit=1;found++}
+               emit {print;if ($0=="}") emit=0}
+               END {if (found!=1 || emit) exit 1}' "tools/ps3recomp/$2"
+          }
+          {
+            extract 's32 cellFsLseek(' libs/filesystem/cellFs.c
+            extract 'int64_t sys_fs_lseek(' runtime/syscalls/sys_fs.c
+            extract 'static void cellFsLseek(' runtime/ppu/ppu_fs.cpp
+            extract 'static void cellFsFstat(' runtime/ppu/ppu_fs.cpp
+          } > tests/file_seek_source.inc
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Verify native 64-bit file positions on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/file-seek"
+          cl /nologo /std:c++17 /EHsc /W4 /D_CRT_SECURE_NO_WARNINGS /Itools/ps3recomp tests/file_seek_fixture.cpp /Fe"$run/check.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Set-Location $run
+          & "./check.exe"
+          exit $LASTEXITCODE
+      - name: Verify native 64-bit file positions and compile the PPU filesystem
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/file-seek.XXXXXXXX")
+          c++ -std=c++17 -Wall -Wextra -Itools/ps3recomp tests/file_seek_fixture.cpp -o "$run/check"
+          (cd "$run" && ./check)
+          python3 tools/ps3recomp/tools/make_smoke_elf.py --out "$run/smoke.elf" --header "$run/ppu_recomp.h"
+          c++ -std=c++20 -fsyntax-only -I"$run" -Itools/ps3recomp/include \
+            -Itools/ps3recomp/runtime/ppu -Itools/ps3recomp/runtime/platform tools/ps3recomp/runtime/ppu/ppu_fs.cpp
