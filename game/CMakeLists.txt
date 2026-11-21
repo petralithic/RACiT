@@ -302,21 +302,32 @@ if(RACACIT_CHECK_HOOKS)
     # a source rewritten during the build would not be recompiled. A change to the patcher
     # or a hook list configures (and so re-patches) again.
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_racit_hook_inputs})
+    set(_racit_configured "${CMAKE_CURRENT_BINARY_DIR}/lift-configured.ok")
+    # Publish the check's start time only on success. A source changed even
+    # during this check is still newer than its proof and is checked at build time.
+    file(TOUCH "${_racit_configured}.pending")
     execute_process(
         COMMAND "${Python3_EXECUTABLE}" -I -X utf8 "${_racit_root}/scripts/check_lift_hooks.py" "${RECOMP_DIR}"
                 --profile "${_racit_profile}" --elf "${_racit_elf}" --patch
                 --stamp "${CMAKE_CURRENT_BINARY_DIR}/lift-patched.ok"
         RESULT_VARIABLE _racit_patch_result)
-    if(NOT _racit_patch_result EQUAL 0)
+    if(NOT _racit_patch_result STREQUAL "0")
+        file(REMOVE "${_racit_configured}.pending")
         message(FATAL_ERROR "The lift in ${RECOMP_DIR} is missing hooks (see above)")
     endif()
-    # The build only checks again (it never writes a source): a lift regenerated or edited
-    # since this configure, and not patched, stops the build.
+    file(RENAME "${_racit_configured}.pending" "${_racit_configured}")
+    # The build reuses the configuration check when the input timestamps allow it.
+    # It never patches or writes lifted sources.
     set(_racit_stamp "${CMAKE_CURRENT_BINARY_DIR}/lift-hooks.ok")
+    set(_racit_check_script "${CMAKE_CURRENT_SOURCE_DIR}/CheckLiftHooks.cmake")
     add_custom_command(OUTPUT "${_racit_stamp}"
-        COMMAND "${Python3_EXECUTABLE}" -I -X utf8 "${_racit_root}/scripts/check_lift_hooks.py" "${RECOMP_DIR}"
-                --profile "${_racit_profile}" --stamp "${_racit_stamp}"
-        DEPENDS ${_racit_hook_inputs} ${RECOMP_SOURCES}
+        COMMAND "${CMAKE_COMMAND}"
+                "-DPYTHON=${Python3_EXECUTABLE}" "-DROOT=${_racit_root}"
+                "-DLIFT=${RECOMP_DIR}" "-DPROFILE=${_racit_profile}"
+                "-DCONFIGURED=${_racit_configured}" "-DSTAMP=${_racit_stamp}"
+                "-DINPUTS=${_racit_hook_inputs};${RECOMP_SOURCES}"
+                -P "${_racit_check_script}"
+        DEPENDS ${_racit_hook_inputs} ${RECOMP_SOURCES} "${_racit_configured}" "${_racit_check_script}"
         COMMENT "Checking the lift's hooks (${_racit_profile})"
         VERBATIM)
     add_custom_target(racit_lift_hooks ALL DEPENDS "${_racit_stamp}")
