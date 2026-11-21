@@ -1,0 +1,46 @@
+name: macOS launcher shader preparation
+on:
+  push:
+    branches: ['ci/run/racit-macos-launcher-shaders-20261121']
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: libsdl-org/SDL
+          ref: 5d249570393f7a37e037abf22cd6012a4cc56a71
+          path: test-sdl
+          sparse-checkout: include
+          persist-credentials: false
+      - name: Compile the launcher UI and exercise the native process path
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/launcher-prepare.XXXXXXXX")
+          mkdir -p "$run/include" "$run/older" "$run/with-prepare"
+          ln -s "$PWD/test-sdl/include" "$run/include/SDL2"
+          clang++ -std=c++17 -mmacosx-version-min=14.0 -fsyntax-only -I"$run/include" \
+            -Ilauncher/src -Imac/launcher launcher/src/app.cpp
+          clang++ -std=c++17 -fobjc-arc -Ilauncher/src -Imac/launcher \
+            -c mac/launcher/util_mac.mm -o "$run/util_mac.o"
+          clang++ -std=c++17 -Ilauncher/src -Imac/launcher tests/mac_prepare_launcher_fixture.cpp \
+            launcher/src/store.cpp launcher/src/iso.cpp launcher/src/util.cpp "$run/util_mac.o" \
+            -lcurl -framework AppKit -framework CoreFoundation -o "$run/check"
+          cp /usr/bin/true "$run/older/RaCACiT"
+          cp "$run/check" "$run/with-prepare/RaCACiT"
+          printf '124\n' > "$run/older/version.txt"
+          printf '125\n' > "$run/with-prepare/version.txt"
+          sed -n '/    if strings -a "\$B\/RaCACiT"/,/    fi/p' mac/package_macos.sh > "$run/mark.sh"
+          bash -n mac/package_macos.sh
+          B="$run/older" bash "$run/mark.sh"
+          B="$run/with-prepare" bash "$run/mark.sh"
+          test ! -e "$run/older/prepare-shaders.flag"
+          test -f "$run/with-prepare/prepare-shaders.flag"
+          "$run/check" "$run/state" "$run/older" "$run/with-prepare"
