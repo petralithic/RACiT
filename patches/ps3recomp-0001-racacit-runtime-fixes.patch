@@ -10238,7 +10238,7 @@ index dab4380..6132681 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 5c50e4a9..04a8d230 100644
+index 5c50e4a9..7b4bb6e 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -11,6 +11,7 @@
@@ -12420,7 +12420,7 @@ index 5c50e4a9..04a8d230 100644
 +    if (!mask || plan->mask != mask) rsx_vertex_layout_plan_init(plan, mask);
 +    *layout = *plan;
  }
-@@ -1006,27 +2612,188 @@ static const char* const kEngFixedPS =
+@@ -1006,27 +2612,193 @@ static const char* const kEngFixedPS =
  "};\n"
  "float4 main(PSInput input) : SV_TARGET { return input.col0; }\n";
  
@@ -12612,14 +12612,19 @@ index 5c50e4a9..04a8d230 100644
 +    if (!fp_same) {
 +        g.fp_constants.count = 0;   /* not the 32 KB block: consumers read `count` */
 +        c_ok = 0;
-+        if (!fixed && rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
-+            return 0;
++        if (!fixed) {
++            c_fhash = rsx_fp_collect_constants_and_hash(fp_uc, fp_size,
++                                                         1469598103934665603ull, &g.fp_constants);
++            if (!c_fhash) return 0;
++            c_serial = s_fpc.serial;
++            c_ok = s_fpc.valid && fp_uc == s_fpc.ptr;
++        }
 +    }
 +    PSTAGE(2);
  
      /* Identity: the vertex program's own bytes, the fragment program's
       * STRUCTURE (its inline constants are hoisted into the buffered block, so
-@@ -1034,17 +2801,47 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1034,17 +2806,42 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
       * SHADER_CONTROL, the cube and vertex-texture masks, the input layout,
       * and the structural render state. */
      u64 key = 1469598103934665603ull;
@@ -12640,11 +12645,6 @@ index 5c50e4a9..04a8d230 100644
 +        if (g.vp_uses_bbits) {
 +            branch_bits = rsx_dsp_reg(&g.rsx, 0x1FF8u);     /* TRANSFORM_BRANCH_BITS */
 +            key = eng_fnv1a(&branch_bits, sizeof branch_bits, key ^ 0xB8B8ull);
-+        }
-+        if (!fp_same) {
-+            c_fhash = rsx_fp_structural_hash(fp_uc, fp_size, 1469598103934665603ull);
-+            if (!c_fhash) return 0;
-+            c_serial = s_fpc.serial; c_ok = s_fpc.valid && fp_uc == s_fpc.ptr;
 +        }
 +        key = eng_fnv1a(&c_fhash, sizeof c_fhash, key);
 +        const u32 fp_ctrl_key = fp_ctrl & 0x4Eu;   /* export width + depth export */
@@ -16651,7 +16651,7 @@ index fa8b57d..9e4963a 100644
  }
  #endif
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index 545670f..c1db848 100644
+index 545670f..3881719 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
 @@ -13,6 +13,26 @@
@@ -16681,48 +16681,13 @@ index 545670f..c1db848 100644
  
  /* ---- DWORD 0 (OPDEST) --------------------------------------------------- */
  #define FP_END              (1u << 0)
-@@ -160,7 +180,10 @@ int rsx_fp_collect_constants(
+@@ -158,9 +178,31 @@
+-int rsx_fp_collect_constants(
+-    const u8* ucode, u32 max_bytes, rsx_fp_constant_block* out)
++static u64 fp_hash_bytes(const void* data, u32 size, u64 hash)
  {
-     if (!ucode || !out)
-         return -1;
--    memset(out, 0, sizeof(*out));
-+    /* Only the count: the block is 2048 slots (32 KB) and every consumer reads
-+     * just the first `count`. Clearing it all, per draw, was ~28% of the draw
-+     * engine's time in A Crack in Time. */
-+    out->count = 0;
- 
-     u32 off = 0;
-     while (off + 16 <= max_bytes) {
-@@ -186,10 +209,38 @@ int rsx_fp_collect_constants(
-     return -1;
- }
- 
-+u32 rsx_fp_texture_mask(const u8* ucode, u32 max_bytes)
-+{
-+    if (!ucode) return 0xFFFFu;
-+    u32 mask = 0, off = 0;
-+    while (off + 16 <= max_bytes) {
-+        const u32 w0 = rsx_fp_read_word(ucode + off + 0);
-+        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
-+        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
-+        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
-+        off += 16;
-+        if (!(w2 & FP_BRANCH)) {
-+            const u32 opcode = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
-+            if (opcode == OP_TEX || opcode == OP_TXP || opcode == OP_TXD ||
-+                opcode == OP_TXB || opcode == OP_TXL)
-+                mask |= 1u << ((w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT);
-+        }
-+        if (fp_instruction_has_constant(w1, w2, w3)) off += 16;
-+        if (w0 & FP_END) return mask;
-+    }
-+    return 0xFFFFu;                 /* no end: say every unit */
-+}
-+
- static u64 fp_hash_bytes(const void* data, u32 size, u64 hash)
- {
-     const u8* bytes = (const u8*)data;
--    for (u32 i = 0; i < size; ++i) {
+-    if (!ucode || !out)
++    const u8* bytes = (const u8*)data;
 +    u32 i = 0;
 +    for (; i + 8 <= size; i += 8) {      /* a cache key: word-wise is enough */
 +        u64 w; memcpy(&w, bytes + i, 8);
@@ -16730,10 +16695,139 @@ index 545670f..c1db848 100644
 +        hash *= 1099511628211ull;
 +    }
 +    for (; i < size; ++i) {
-         hash ^= bytes[i];
-         hash *= 1099511628211ull;
++        hash ^= bytes[i];
++        hash *= 1099511628211ull;
++    }
++    return hash;
++}
++
++/* Walk instruction slots once when the caller needs both results. Inline
++ * payloads supply the draw's constants without contributing to the hash. */
++static inline int fp_scan_program(const u8* ucode, u32 max_bytes,
++                                  rsx_fp_constant_block* constants, u64* structural)
++{
++    if (!ucode)
+         return -1;
+-    memset(out, 0, sizeof(*out));
++    if (constants) constants->count = 0;
++    static const u32 structural_tag = 0x31535046u; /* "FPS1" */
++    u64 hash = structural ? fp_hash_bytes(&structural_tag, sizeof structural_tag, *structural) : 0;
++    u32 instruction_count = 0;
++    u32 constant_count = 0;
+ 
+     u32 off = 0;
+     while (off + 16 <= max_bytes) {
+@@ -168,30 +210,37 @@
+         const u32 w1 = rsx_fp_read_word(ucode + off + 4);
+         const u32 w2 = rsx_fp_read_word(ucode + off + 8);
+         const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        if (structural) {
++            hash = fp_hash_bytes(ucode + off, 16, hash);
++            instruction_count++;
++        }
+         off += 16;
+         if (fp_instruction_has_constant(w1, w2, w3)) {
+-            if (off + 16 > max_bytes ||
+-                out->count >= RSX_FP_MAX_INLINE_CONSTANTS)
++            if (off + 16 > max_bytes || constant_count >= RSX_FP_MAX_INLINE_CONSTANTS)
+                 return -1;
+-            for (u32 component = 0; component < 4; ++component)
+-                out->values[out->count][component] =
+-                    rsx_fp_sanitize_constant_word(
+-                        rsx_fp_read_word(ucode + off + component * 4));
+-            out->count++;
++            if (constants) {
++                for (u32 component = 0; component < 4; ++component)
++                    constants->values[constant_count][component] =
++                        rsx_fp_sanitize_constant_word(
++                            rsx_fp_read_word(ucode + off + component * 4));
++                constants->count++;
++            }
++            constant_count++;
+             off += 16;
+         }
+-        if (w0 & FP_END)
+-            return (int)out->count;
++        if (w0 & FP_END) {
++            if (structural) {
++                hash = fp_hash_bytes(&instruction_count, sizeof instruction_count, hash);
++                *structural = fp_hash_bytes(&constant_count, sizeof constant_count, hash);
++            }
++            return (int)constant_count;
++        }
      }
-@@ -329,13 +380,39 @@ static void decode_src(u32 w, int abs_bit, Src* s)
+     return -1;
+ }
+ 
+-static u64 fp_hash_bytes(const void* data, u32 size, u64 hash)
++int rsx_fp_collect_constants(
++    const u8* ucode, u32 max_bytes, rsx_fp_constant_block* out)
+ {
+-    const u8* bytes = (const u8*)data;
+-    for (u32 i = 0; i < size; ++i) {
+-        hash ^= bytes[i];
+-        hash *= 1099511628211ull;
+-    }
+-    return hash;
++    return out ? fp_scan_program(ucode, max_bytes, out, NULL) : -1;
+ }
+@@ -199,34 +248,32 @@
+ u64 rsx_fp_structural_hash(const u8* ucode, u32 max_bytes, u64 seed)
+ {
+-    if (!ucode)
+-        return 0;
+-    static const u32 structural_tag = 0x31535046u; /* "FPS1" */
+-    u64 hash = fp_hash_bytes(&structural_tag, sizeof(structural_tag), seed);
+-    u32 off = 0;
+-    u32 instruction_count = 0;
+-    u32 constant_count = 0;
++    return fp_scan_program(ucode, max_bytes, NULL, &seed) < 0 ? 0 : seed;
++}
++
++u64 rsx_fp_collect_constants_and_hash(const u8* ucode, u32 max_bytes, u64 seed,
++                                       rsx_fp_constant_block* out)
++{
++    return fp_scan_program(ucode, max_bytes, out, &seed) < 0 ? 0 : seed;
++}
++
++u32 rsx_fp_texture_mask(const u8* ucode, u32 max_bytes)
++{
++    if (!ucode) return 0xFFFFu;
++    u32 mask = 0, off = 0;
+     while (off + 16 <= max_bytes) {
+         const u32 w0 = rsx_fp_read_word(ucode + off + 0);
+         const u32 w1 = rsx_fp_read_word(ucode + off + 4);
+         const u32 w2 = rsx_fp_read_word(ucode + off + 8);
+         const u32 w3 = rsx_fp_read_word(ucode + off + 12);
+-        hash = fp_hash_bytes(ucode + off, 16, hash);
+-        instruction_count++;
+         off += 16;
+-        if (fp_instruction_has_constant(w1, w2, w3)) {
+-            if (off + 16 > max_bytes ||
+-                constant_count >= RSX_FP_MAX_INLINE_CONSTANTS)
+-                return 0;
+-            constant_count++;
+-            off += 16;
+-        }
+-        if (w0 & FP_END) {
+-            hash = fp_hash_bytes(
+-                &instruction_count, sizeof(instruction_count), hash);
+-            hash = fp_hash_bytes(
+-                &constant_count, sizeof(constant_count), hash);
+-            return hash;
++        if (!(w2 & FP_BRANCH)) {
++            const u32 opcode = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
++            if (opcode == OP_TEX || opcode == OP_TXP || opcode == OP_TXD ||
++                opcode == OP_TXB || opcode == OP_TXL)
++                mask |= 1u << ((w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT);
+         }
++        if (fp_instruction_has_constant(w1, w2, w3)) off += 16;
++        if (w0 & FP_END) return mask;
+     }
+-    return 0;
++    return 0xFFFFu;                 /* no end: say every unit */
+ }
+@@ -329,13 +376,39 @@ static void decode_src(u32 w, int abs_bit, Src* s)
  /* HLSL expression for the interpolated input selected by OPDEST.INPUT_SRC.
   * The backend's passthrough VS forwards COL0/COL1/FOG/TEXCOORD0..7; WPOS maps
   * to SV_POSITION (screen-space — an approximation of the RSX window coord). */
@@ -16774,7 +16868,7 @@ index 545670f..c1db848 100644
      case 0x1: return "input.col0";     /* COL0 */
      case 0x2: return "input.col1";     /* COL1 */
      case 0x3: return "input.fog";      /* FOGC */
-@@ -349,7 +426,7 @@ static const char* input_expr(u32 input_src)
+@@ -349,7 +422,7 @@ static const char* input_expr(u32 input_src)
  static void emit_src(const Src* s, u32 input_src, const float* k, int has_k,
                       int buffered, u32 constant_slot, char* buf, u32 bufsz)
  {
@@ -16783,7 +16877,7 @@ index 545670f..c1db848 100644
      if (s->type == FP_REG_TYPE_TEMP) {
          snprintf(base, sizeof(base), "%s[%u]", s->half ? "h" : "r", s->index);
      } else if (s->type == FP_REG_TYPE_INPUT) {
-@@ -365,7 +442,7 @@ static void emit_src(const Src* s, u32 input_src, const float* k, int has_k,
+@@ -365,7 +438,7 @@ static void emit_src(const Src* s, u32 input_src, const float* k, int has_k,
              snprintf(base, sizeof(base), "float4(0,0,0,0)");
      }
  
@@ -16792,7 +16886,7 @@ index 545670f..c1db848 100644
      snprintf(swz, sizeof(swz), "(%s).%s", base, s->swz);
  
      const char* pre = "";
-@@ -415,13 +492,96 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
+@@ -415,13 +488,96 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, u32 ctrl, char* out, u32 ou
      return rsx_fp_decompile_ex(ucode, max_bytes, ctrl, 0u, out, out_size);
  }
  
@@ -16889,7 +16983,7 @@ index 545670f..c1db848 100644
      if (buffered) {
          rsx_fp_constant_block constants;
          const int result =
-@@ -488,6 +648,18 @@ static int rsx_fp_decompile_internal(
+@@ -488,6 +644,18 @@ static int rsx_fp_decompile_internal(
          u32 input_src = (w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT;
          u32 tex_unit  = (w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT;
          int is_branch = (w2 & FP_BRANCH) ? 1 : 0;
@@ -16908,7 +17002,7 @@ index 545670f..c1db848 100644
  
          /* Execution condition (exec_if) + condition-code write (set_cond).
           * Faithful to RPCS3 FragmentProgramDecompiler {GetRawCond, AddCodeCond,
-@@ -539,7 +711,7 @@ static int rsx_fp_decompile_internal(
+@@ -539,7 +707,7 @@ static int rsx_fp_decompile_internal(
              has_k = 1;
          }
  
@@ -16917,7 +17011,7 @@ index 545670f..c1db848 100644
          emit_src(
              &s0, input_src, k, has_k, buffered, constant_slot,
              a, sizeof(a));
-@@ -610,7 +782,7 @@ static int rsx_fp_decompile_internal(
+@@ -610,7 +778,7 @@ static int rsx_fp_decompile_internal(
          }
  
          /* Build the RHS expression for this opcode. */
@@ -16926,7 +17020,7 @@ index 545670f..c1db848 100644
          int handled = 1;
          switch (opcode) {
          case OP_NOP: rhs[0] = '\0'; handled = 0; break;
-@@ -671,45 +843,133 @@ static int rsx_fp_decompile_internal(
+@@ -671,45 +839,133 @@ static int rsx_fp_decompile_internal(
          case OP_SGT: snprintf(rhs, sizeof(rhs), "(float4)((%s) >  (%s))", a, b); break;
          case OP_SNE: snprintf(rhs, sizeof(rhs), "(float4)((%s) != (%s))", a, b); break;
          case OP_SEQ: snprintf(rhs, sizeof(rhs), "(float4)((%s) == (%s))", a, b); break;
@@ -17085,7 +17179,7 @@ index 545670f..c1db848 100644
          case OP_KIL:
              /* Fragment kill. Predicated by the same exec_if condition as any
               * other instruction (RPCS3 FragmentProgramDecompiler case
-@@ -766,14 +1026,14 @@ static int rsx_fp_decompile_internal(
+@@ -766,14 +1022,14 @@ static int rsx_fp_decompile_internal(
              if (has_dest && is_uncond && !set_cond) {
                  /* Common unconditional path — kept byte-identical so the 39
                   * non-predicated programs in this capture emit unchanged. */
@@ -17102,7 +17196,7 @@ index 545670f..c1db848 100644
                  snprintf(buf, sizeof(buf),
                           "    { float4 _v = (float4)(%s)%s;%s\n",
                           rhs, scale_txt[res_scale], sat);
-@@ -839,6 +1099,13 @@ static int rsx_fp_decompile_internal(
+@@ -839,6 +1095,13 @@ static int rsx_fp_decompile_internal(
          half_exports = (ctrl & FP_CTRL_32BIT_EXPORTS) ? 0 : 1;
      }
      const char* export_file = half_exports ? "h" : "r";
@@ -17116,7 +17210,7 @@ index 545670f..c1db848 100644
  
      /* How many colour targets the program feeds: one past the highest export
       * register of the selected file it wrote. A program that writes only the
-@@ -851,33 +1118,69 @@ static int rsx_fp_decompile_internal(
+@@ -851,33 +1114,69 @@ static int rsx_fp_decompile_internal(
      for (u32 t = FP_MAX_COLOR_TARGETS; t-- > 1; )
          if (wrote[half_exports][t]) { targets = t + 1; break; }
  
@@ -17196,7 +17290,7 @@ index 545670f..c1db848 100644
      Out p = { preamble, sizeof(preamble), 0, 1 };
      preamble[0] = '\0';
      out_puts(&p,
-@@ -891,8 +1194,10 @@ static int rsx_fp_decompile_internal(
+@@ -891,8 +1190,10 @@ static int rsx_fp_decompile_internal(
       * array declaration so 2D-only programs are byte-identical. When any unit
       * is a cubemap, declare each unit individually at its t-register so the
       * cube units can be TextureCube while the rest stay Texture2D. */
@@ -17208,7 +17302,7 @@ index 545670f..c1db848 100644
      } else {
          char decl[64];
          for (u32 u = 0; u < 16; u++) {
-@@ -904,18 +1209,203 @@ static int rsx_fp_decompile_internal(
+@@ -904,18 +1205,203 @@ static int rsx_fp_decompile_internal(
      out_puts(&p,
          "SamplerState rsx_samp[16] : register(s0);\n"
      );
@@ -17415,7 +17509,7 @@ index 545670f..c1db848 100644
          out_puts(&p, "float4 main(PSInput input) : SV_TARGET {\n");
      } else {
          out_puts(&p, "struct PSOutput {\n");
-@@ -925,10 +1415,15 @@ static int rsx_fp_decompile_internal(
+@@ -925,10 +1411,15 @@ static int rsx_fp_decompile_internal(
                       "    float4 t%u : SV_TARGET%u;\n", t, t);
              out_puts(&p, member);
          }
@@ -17431,7 +17525,7 @@ index 545670f..c1db848 100644
      if (!o.ok || !p.ok) return -1;
      if (o.len + p.len + 1 > out_size) return -1;
      memmove(out + p.len, out, o.len + 1);
-@@ -1143,7 +1638,7 @@ int rsx_fp_extract_consts(const u8* ucode, u32 max_bytes, float* out, int max_ou
+@@ -1143,7 +1634,7 @@ int rsx_fp_extract_consts(const u8* ucode, u32 max_bytes, float* out, int max_ou
      }
      { static int dbg = -1;
        if (dbg < 0) { const char* e = getenv("FP_KDBG"); dbg = e ? atoi(e) : 0; }
@@ -17440,7 +17534,7 @@ index 545670f..c1db848 100644
          fprintf(stderr, "[FPK] %d consts%c", n, 10);
          for (int _q = 0; _q < n; _q++)
              fprintf(stderr, "   k[%2d] = (%g %g %g %g)%c", _q, out[_q*4+0],
-@@ -1215,7 +1710,7 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+@@ -1215,7 +1706,7 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
      for (u32 u = 0; u < 16; u++) {
          if (!((unnorm_mask >> u) & 1u)) continue;
          if ((cube_mask >> u) & 1u) continue;
@@ -17449,7 +17543,7 @@ index 545670f..c1db848 100644
          if (!w || !h) continue;
  
          /* Both spellings the emitter produces for a 2D unit. */
-@@ -1242,8 +1737,11 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
+@@ -1242,8 +1733,11 @@ int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
                  if (*p != ')') break;
  
                  char scale[80];
@@ -17464,7 +17558,7 @@ index 545670f..c1db848 100644
                  const u32 used = (u32)strlen(hlsl);
                  if (used + slen + 1 > hlsl_size) return -1;
 diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
-index cbec250..4359a3b 100644
+index cbec250..159328c 100644
 --- a/libs/video/rsx_fp_decompiler.h
 +++ b/libs/video/rsx_fp_decompiler.h
 @@ -84,6 +84,24 @@ float rsx_fp_alpha_ref(u32 raw, u32 surface_color_format);
@@ -17492,10 +17586,15 @@ index cbec250..4359a3b 100644
  int rsx_fp_apply_unnorm_scale(char* hlsl, u32 hlsl_size, u32 unnorm_mask,
                                const u32 dim[][2], u32 cube_mask);
  
-@@ -126,6 +144,10 @@ int rsx_fp_collect_constants(
+@@ -126,6 +144,15 @@ int rsx_fp_collect_constants(
   * malformed input. */
  u64 rsx_fp_structural_hash(const u8* ucode, u32 max_bytes, u64 seed);
  
++/* Compute the structural hash and collect inline constants in one pass.
++ * Returns zero for malformed input. */
++u64 rsx_fp_collect_constants_and_hash(const u8* ucode, u32 max_bytes, u64 seed,
++                                       rsx_fp_constant_block* out);
++
 +/* The texture units the program samples (TEX, TXP, TXD, TXB, TXL), bit u for
 + * unit u. 0xFFFF when the program does not parse to its end. */
 +u32 rsx_fp_texture_mask(const u8* ucode, u32 max_bytes);
