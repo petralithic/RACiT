@@ -17447,10 +17447,10 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..cb80f961
+index 00000000..ac99b329
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2382 @@
+@@ -0,0 +1,2404 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
@@ -18396,12 +18396,46 @@ index 00000000..cb80f961
 +    if (!captured) update_cursor();
 +}
 +
++static void captured_mouse_wheel(const SDL_MouseWheelEvent* event, int scripted)
++{
++    /* WheelUp/Down bindings follow the device. Menus below follow system scrolling. */
++    const int wheel = event->direction == SDL_MOUSEWHEEL_FLIPPED ? -event->y : event->y;
++    LOCK();
++    if (scripted) s_mtest = 1;
++    if (s_weapon_scroll_supported && s_opt.kbm && s_opt.weapon_scroll &&
++        !s_open && !s_sv_active) {
++#if SDL_VERSION_ATLEAST(2, 0, 18)
++        const float y = event->preciseY;
++#else
++        const float y = event->y;
++#endif
++        const Uint64 now = SDL_GetTicks64();
++        /* SDL2 backends can put smooth and detented input on the same mouse ID.
++         * Keep integral samples within a detected smooth gesture in that gesture. */
++        if (event->which == SDL_TOUCH_MOUSEID || y != truncf(y))
++            s_smooth_until = now + 180;
++        const int smooth = now < s_smooth_until;
++        if (y != 0 && (!smooth || s_opt.weapon_scroll == 2)) {
++            if (now - s_scroll_at >= 250) s_weapon_scroll = 0;
++            const float clockwise = event->direction == SDL_MOUSEWHEEL_FLIPPED ? y : -y;
++            const float scale = smooth ? 0.25f : 1.0f;
++            s_weapon_scroll = fminf(32.0f, fmaxf(-32.0f,
++                s_weapon_scroll + clockwise * scale * (float)s_opt.scroll_sens / 100.0f));
++            s_scroll_at = now;
++        }
++    } else {
++        s_mwheel += wheel;
++    }
++    UNLOCK();
++}
++
 +int rsx_host_ui_take_weapon_scroll(void)
 +{
 +    if (!s_weapon_scroll_supported) return 0;
 +    const Uint64 now = SDL_GetTicks64();
 +    LOCK();
-+    if (!s_mcap || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active ||
++    const int captured = s_mcap || (s_mtest && !s_win);
++    if (!captured || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active ||
 +        now - s_scroll_at >= 250) s_weapon_scroll = 0;
 +    const int steps = (int)s_weapon_scroll;
 +    s_weapon_scroll -= (float)steps;
@@ -18619,34 +18653,7 @@ index 00000000..cb80f961
 +        return activate(e->button.button == SDL_BUTTON_RIGHT ? -1 : +1); }
 +    case SDL_MOUSEWHEEL:
 +        if (s_mcap) {
-+            /* WheelUp/Down bindings follow the device. Menus below follow system scrolling. */
-+            const int wheel = e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e->wheel.y : e->wheel.y;
-+            LOCK();
-+            if (s_weapon_scroll_supported && s_opt.kbm && s_opt.weapon_scroll &&
-+                !s_open && !s_sv_active) {
-+#if SDL_VERSION_ATLEAST(2, 0, 18)
-+                const float y = e->wheel.preciseY;
-+#else
-+                const float y = e->wheel.y;
-+#endif
-+                const Uint64 now = SDL_GetTicks64();
-+                /* SDL2 backends can put smooth and detented input on the same mouse ID.
-+                 * Keep integral samples within a detected smooth gesture in that gesture. */
-+                if (e->wheel.which == SDL_TOUCH_MOUSEID || y != truncf(y))
-+                    s_smooth_until = now + 180;
-+                const int smooth = now < s_smooth_until;
-+                if (y != 0 && (!smooth || s_opt.weapon_scroll == 2)) {
-+                    if (now - s_scroll_at >= 250) s_weapon_scroll = 0;
-+                    const float clockwise = e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? y : -y;
-+                    const float scale = smooth ? 0.25f : 1.0f;
-+                    s_weapon_scroll = fminf(32.0f, fmaxf(-32.0f,
-+                        s_weapon_scroll + clockwise * scale * (float)s_opt.scroll_sens / 100.0f));
-+                    s_scroll_at = now;
-+                }
-+            } else {
-+                s_mwheel += wheel;
-+            }
-+            UNLOCK();
++            captured_mouse_wheel(&e->wheel, 0);
 +            return 0;
 +        }
 +        if (s_open && tr_shown()) { if (e->wheel.y) tr_move(e->wheel.y > 0 ? -3 : 3); return 0; }
@@ -19772,6 +19779,21 @@ index 00000000..cb80f961
 +        /* "mouse <dx> <dy>": camera motion as from a captured mouse. */
 +        int dx = 0, dy = 0;
 +        if (sscanf(arg, "%d %d", &dx, &dy) == 2) { LOCK(); s_mdx += dx; s_mdy += dy; s_mtest = 1; UNLOCK(); }
++    } else if (!strcmp(cmd, "wheel")) {
++        /* "wheel <ticks> [touchpad]": positive is up, negative is down. */
++        const char* ignore_real = getenv("PAD_IGNORE_REAL");
++        if (s_win || !ignore_real || *ignore_real != '1') return;
++        int ticks;
++        char device[9] = "";
++        const int n = sscanf(arg, "%d %8s", &ticks, device);
++        if (n < 1 || !ticks || ticks < -32 || ticks > 32 || (n > 1 && strcmp(device, "touchpad"))) return;
++        e.type = SDL_MOUSEWHEEL;
++        e.wheel.y = ticks;
++        e.wheel.which = n > 1 ? SDL_TOUCH_MOUSEID : 0;
++#if SDL_VERSION_ATLEAST(2, 0, 18)
++        e.wheel.preciseY = (float)ticks;
++#endif
++        captured_mouse_wheel(&e.wheel, 1);
 +    } else if (!strcmp(cmd, "wait")) {
 +        next = t + (unsigned long long)atoi(arg);
 +    }
