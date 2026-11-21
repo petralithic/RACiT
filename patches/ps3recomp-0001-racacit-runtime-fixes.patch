@@ -29494,7 +29494,7 @@ index acbaf12..6ca46a3 100644
  }
  
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
-index e73a151..6e9a7e1 100644
+index e73a151..4f30a5b 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
 @@ -35,6 +35,14 @@
@@ -30891,7 +30891,24 @@ index e73a151..6e9a7e1 100644
                  for (int n=0;n<1024;n++){s_acc[n]=0;s_cnt[n]=0;} s_win=_t0;
              }
              if (_ok) { sc_trace(num, ctx, _a3, _a4, _a5, 0); return; }
-@@ -3423,7 +4162,7 @@ extern "C" uint32_t ppu_load_elf(const char* path)
+@@ -3269,4 +4008,4 @@ static uint64_t be64(const uint8_t* p)
+-extern "C" uint32_t ppu_load_elf(const char* path)
++extern "C" uint32_t ppu_load_elf_checked(const char* path, bool (*accept)(const uint8_t*, size_t))
+ {
+     FILE* f = fopen(path, "rb");
+     if (!f) { fprintf(stderr, "[ppu] cannot open %s\n", path); return 0; }
+@@ -3280,6 +4019,10 @@ extern "C" uint32_t ppu_load_elf(const char* path)
+     if (sz < 64 || memcmp(file, "\x7F""ELF", 4) != 0 || file[4] != 2 /*ELFCLASS64*/ || file[5] != 2 /*MSB*/) {
+         fprintf(stderr, "[ppu] not a 64-bit big-endian ELF\n"); free(file); return 0;
+     }
++    if (accept && !accept(file, (size_t)sz)) {
++        free(file);
++        return 0;
++    }
+     uint64_t fsz = (uint64_t)sz;
+     uint32_t entry = (uint32_t)be64(file + 24);
+     uint64_t phoff = be64(file + 32);
+@@ -3423,7 +4166,7 @@ extern "C" uint32_t ppu_load_elf(const char* path)
                            if (memcmp(vm_base + keep_ea, keep, keep_len)) {
                                memcpy(vm_base + keep_ea, keep, keep_len);
                                static int n = 0;
@@ -30900,7 +30917,16 @@ index e73a151..6e9a7e1 100644
                            }
                            Sleep(2);
                        } } };
-@@ -3669,7 +4408,9 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
+@@ -3437,3 +4180,8 @@ extern "C" uint32_t ppu_load_elf(const char* path)
++extern "C" uint32_t ppu_load_elf(const char* path)
++{
++    return ppu_load_elf_checked(path, nullptr);
++}
++
+ /* Resolve an OPD descriptor {u32 func, u32 toc}. */
+ extern "C" int ppu_opd_resolve(uint32_t opd, uint32_t* code, uint32_t* toc)
+ {
+@@ -3669,7 +4417,9 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
       * sys_mutex -- LBP's main + bringup threads both held the GCM lock at once
       * and concurrently-emitted fences vanished (the boot-loading stall). */
      { extern uint64_t ppu_thread_register_main(void);
@@ -30911,7 +30937,7 @@ index e73a151..6e9a7e1 100644
  
      /* PS3 process-entry ABI: the loader hands _start register state the CRT
       * (_initialize) consumes directly:
-@@ -3772,6 +4513,7 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
+@@ -3772,6 +4522,7 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
      fprintf(stderr, "[ppu] run: code 0x%08X, toc 0x%08X, sp 0x%08X\n", code, toc, stack_top);
      g_active_ctx = &ctx;
      ppu_resv_register(&ctx);   /* main/entry thread: join the reservation set too */

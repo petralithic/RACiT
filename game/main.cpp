@@ -50,6 +50,9 @@ extern "C" void ppu_threads_dump_stacks(ppu_context* main_ctx);
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#ifdef RACACIT_BUILD_PROFILE_ID
+#include <zlib.h>
+#endif
 #ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>   /* _exit */
@@ -86,6 +89,9 @@ static void racacit_log_flush(void);
  * -----------------------------------------------------------------------*/
 extern "C" {
 uint32_t ppu_load_elf(const char* path);      /* ELF -> guest RAM, returns entry OPD */
+#ifdef RACACIT_BUILD_PROFILE_ID
+uint32_t ppu_load_elf_checked(const char* path, bool (*accept)(const uint8_t*, size_t));
+#endif
 void     ppu_recomp_register(void);           /* generated: lifted table -> address map */
 void     ppu_hle_init(void);                  /* firmware import NID -> HLE handler */
 void     ppu_sysprx_register(void);           /* boot-critical CRT (sys_initialize_tls, ...) */
@@ -1759,6 +1765,23 @@ static int prepare_shaders_offscreen()
 }
 #endif
 
+#ifdef RACACIT_BUILD_PROFILE_ID
+static bool accepts_game_executable(const uint8_t* bytes, size_t size)
+{
+    static const struct { const char* id; size_t size; uint32_t crc; } profiles[] = {
+#include "known_elf_profiles.inc"
+    };
+    for (const auto& profile : profiles) {
+        if (profile.size != size || profile.crc != crc32(0, bytes, static_cast<uInt>(size))) continue;
+        if (strcmp(profile.id, RACACIT_BUILD_PROFILE_ID) == 0) return true;
+        fprintf(stderr, "This build is for %s. The executable you provided is %s. Use the matching build and EBOOT.elf.\n",
+                RACACIT_BUILD_PROFILE_ID, profile.id);
+        return false;
+    }
+    return true;
+}
+#endif
+
 int main(int argc, char** argv)
 {
 #if defined(__linux__) && !defined(__ANDROID__)
@@ -1881,7 +1904,11 @@ int main(int argc, char** argv)
     }
 #endif
     if (!racit_menu_archive_init()) return 1;
+#ifdef RACACIT_BUILD_PROFILE_ID
+    uint32_t entry = ppu_load_elf_checked(argv[1], accepts_game_executable);
+#else
     uint32_t entry = ppu_load_elf(argv[1]);
+#endif
     if (!entry) {
         fprintf(stderr, "ERROR: could not load %s\n", argv[1]);
         return 1;

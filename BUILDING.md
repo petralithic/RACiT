@@ -194,6 +194,10 @@ The repository root builds the **BCUS98124 disc 1.00** layout. **BCES00511 disc 
 
 The European disc fingerprint was checked against a decrypted original executable, as were both NA ones. Enabling another version needs its own complete hook/data/SPU mappings, separate generated/build outputs, launcher selection, and runtime/save checks. Do not infer an address offset from a neighbouring function: updates can change function bodies and data layouts.
 
+Direct desktop launches check the two North American executables against the
+selected build. If the disc and update executables were swapped, the load stops
+with the version it expected and the one it found.
+
 ### Update 1.20 (`BCUS98124` 1.20, public PRs #37, #59, #67)
 
 Give the pipeline the decrypted update executable (`USRDIR/EBOOT.BIN` of the installed update):
