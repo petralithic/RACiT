@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-2025]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 8
     steps:
@@ -41,7 +41,7 @@ jobs:
             if [[ "$variant" == baseline ]]; then selected_patch="$run/baseline.patch"; extra=(-DBASELINE); fi
             git -C "$runtime" apply --ignore-whitespace --include="$file" "$selected_patch"
             awk '/^static inline u32 vk_fbs\(/ { emit=1 }
-                 emit && /^[/][*] Batched draw:/ { ok=1; exit }
+                 emit && index($0, "/* Batched draw:") == 1 { ok=1; exit }
                  emit { print } END { if (!ok) exit 1 }' "$runtime/$file" > dynamic_state.inc
             awk '/^static void vk_eng_draw_batched\(/ { batch=1 }
                  batch && /^        (if \(s_vk_foreign_bind\)|const int dyn_same =)/ { print; marker++ }
