@@ -21241,7 +21241,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b7..1889a93 100644
+index e2687b7..08efcc5 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -25012,7 +25012,7 @@ index e2687b7..1889a93 100644
      struct { u32 key[RSX_BE_MAX_COLOR_TARGETS + 1]; VkFramebuffer fb; } fb[VK_ENG_FB_CACHE];
      u32          fb_count;
      vk_image     scratch_depth;                          /* when no zeta is bound */
-@@ -2395,34 +5014,131 @@ static struct {
+@@ -2395,34 +5014,133 @@ static struct {
      u32          stencil_ref;
      vk_buffer    indices;
      u32          warned;
@@ -25032,6 +25032,8 @@ index e2687b7..1889a93 100644
 +    u32          last_vsb, last_psb;
 +    VkDescriptorSet last_set, bound_set;
 +    VkDeviceSize bound_uvo, bound_upo;
++    VkBuffer     bound_vbuf, bound_ibuf;
++    VkDeviceSize bound_vo, bound_io;
 +    VkPipeline   last_pipe;
 +    u32          dyn_epoch, dyn_w, dyn_h, dyn_ref, dyn_have_vp, dyn_have_sc;
 +    float        dbias_units, dbias_factor, dyn_dbu, dyn_dbf;   /* polygon offset */
@@ -25155,7 +25157,7 @@ index e2687b7..1889a93 100644
              .initialLayout = VK_IMAGE_LAYOUT_GENERAL, .finalLayout = VK_IMAGE_LAYOUT_GENERAL };
          if (i < n) cref[i] = (VkAttachmentReference){ i, VK_IMAGE_LAYOUT_GENERAL };
      }
-@@ -2433,9 +5149,22 @@ static VkRenderPass vk_eng_render_pass(u32 n)
+@@ -2433,9 +5151,22 @@ static VkRenderPass vk_eng_render_pass(u32 n)
      VkRenderPassCreateInfo rci = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
                                     .attachmentCount = n + 1, .pAttachments = att,
                                     .subpassCount = 1, .pSubpasses = &sub };
@@ -25181,7 +25183,7 @@ index e2687b7..1889a93 100644
  }
  
  /* Tables carried from the Metal backend, itself copied from the D3D12 live
-@@ -2454,6 +5183,10 @@ static VkBlendFactor vk_gcm_blend_factor(u32 f)
+@@ -2454,6 +5185,10 @@ static VkBlendFactor vk_gcm_blend_factor(u32 f)
      case 0x0306: return VK_BLEND_FACTOR_DST_COLOR;
      case 0x0307: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
      case 0x0308: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
@@ -25192,7 +25194,7 @@ index e2687b7..1889a93 100644
      default:     return VK_BLEND_FACTOR_ONE;
      }
  }
-@@ -2484,168 +5217,1323 @@ static VkStencilOp vk_gcm_stencil_op(u32 op)
+@@ -2484,168 +5219,1323 @@ static VkStencilOp vk_gcm_stencil_op(u32 op)
      default:     return VK_STENCIL_OP_KEEP;               /* GL_KEEP 0x1E00 */
      }
  }
@@ -26656,7 +26658,7 @@ index e2687b7..1889a93 100644
      }
      return P->variant[topo_idx];
  }
-@@ -2654,15 +6542,20 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
+@@ -2654,15 +6544,20 @@ static void vk_eng_bind_pipeline(void* user, u32 pipeline) { (void)user; s_e2.pi
  
  static void vk_eng2_shutdown(void* user)
  {
@@ -26679,7 +26681,7 @@ index e2687b7..1889a93 100644
  }
  
  /* Constants go straight into the shared UBO: vertex at 0, pixel at ps_off.
-@@ -2673,8 +6566,11 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
+@@ -2673,8 +6568,11 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
      if (!s_g.on || !data) { s_e2.vs_bytes = 0; return; }
      const u32 cap = (u32)s_g.ps_off;
      if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 2u)) { VK_LOG("engine: VS constants truncated\n"); s_e2.warned |= 2u; } }
@@ -26692,7 +26694,7 @@ index e2687b7..1889a93 100644
  }
  static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
  {
-@@ -2682,17 +6578,31 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
+@@ -2682,17 +6580,31 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
      if (!s_g.on || !data) { s_e2.ps_bytes = 0; return; }
      const u32 cap = (u32)(s_g.ubo.size - s_g.ps_off);
      if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 4u)) { VK_LOG("engine: PS constants truncated\n"); s_e2.warned |= 4u; } }
@@ -26727,7 +26729,7 @@ index e2687b7..1889a93 100644
      }
      s_e2.tex_mask = mask;
  }
-@@ -2713,6 +6623,11 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
+@@ -2713,6 +6625,11 @@ static void vk_eng_set_scissor(void* user, u32 x, u32 y, u32 w, u32 h)
      s_e2.sc[0] = x; s_e2.sc[1] = y; s_e2.sc[2] = w; s_e2.sc[3] = h; s_e2.have_sc = 1;
  }
  static void vk_eng_set_stencil_ref(void* user, u32 ref) { (void)user; s_e2.stencil_ref = ref; }
@@ -26739,7 +26741,7 @@ index e2687b7..1889a93 100644
  
  static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, VkImageView dview,
                                          u32 dkey, u32 w, u32 h)
-@@ -2730,7 +6645,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
+@@ -2730,7 +6647,7 @@ static VkFramebuffer vk_eng_framebuffer(VkRenderPass rp, const u32* rt, u32 n, V
                                      .renderPass = rp, .attachmentCount = n + 1, .pAttachments = views,
                                      .width = w, .height = h, .layers = 1 };
      VkFramebuffer fb = VK_NULL_HANDLE;
@@ -26748,7 +26750,7 @@ index e2687b7..1889a93 100644
      memcpy(s_e2.fb[s_e2.fb_count].key, key, sizeof key);
      s_e2.fb[s_e2.fb_count++].fb = fb;
      return fb;
-@@ -2744,19 +6659,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
+@@ -2744,19 +6661,101 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
          return s_e2.scratch_depth.view;
      vk_eng_drop_framebuffers();
      vk_destroy_image(&s_e2.scratch_depth);
@@ -26854,7 +26856,7 @@ index e2687b7..1889a93 100644
  static int vk_eng_ensure_indices(VkDeviceSize bytes)
  {
      if (s_e2.indices.buf && s_e2.indices.size >= bytes) return 0;
-@@ -2777,23 +6774,62 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
+@@ -2777,23 +6776,62 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
                    | ((u64)d->mip_present << 3) | ((u64)(d->wrap_s & 0xF) << 4)
                    | ((u64)(d->wrap_t & 0xF) << 8) | ((u64)(d->wrap_r & 0xF) << 12)
                    | ((u64)(lo >> 16) << 16) | ((u64)(hi >> 16) << 32);
@@ -26925,7 +26927,7 @@ index e2687b7..1889a93 100644
      return smp;
  }
  
-@@ -2807,67 +6843,474 @@ static VkImageView vk_eng_sample_view(u32 handle)
+@@ -2807,67 +6845,486 @@ static VkImageView vk_eng_sample_view(u32 handle)
                 ? o->im.view : VK_NULL_HANDLE;
  }
  
@@ -27296,9 +27298,21 @@ index e2687b7..1889a93 100644
 +                                     0, 1, &set, 2, offs);
 +            s_e2.bound_set = set; s_e2.bound_uvo = uvo; s_e2.bound_upo = upo;
 +        }
-+        pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &vbuf, &vo);
++        /* A new command batch or an outside draw invalidates the bindings.
++         * Its first draw may have no indices, so forget any old index buffer. */
++        if (!dyn_same) s_e2.bound_ibuf = VK_NULL_HANDLE;
++        if (!dyn_same || s_e2.bound_vbuf != vbuf || s_e2.bound_vo != vo) {
++            pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &vbuf, &vo);
++            s_e2.bound_vbuf = vbuf;
++            s_e2.bound_vo = vo;
++        }
 +        if (ibytes) {
-+            pvkCmdBindIndexBuffer(s_vk.cmd, gidx ? s_geo_heap.buf : sl->arena.buf, io, VK_INDEX_TYPE_UINT32);
++            const VkBuffer ibuf = gidx ? s_geo_heap.buf : sl->arena.buf;
++            if (s_e2.bound_ibuf != ibuf || s_e2.bound_io != io) {
++                pvkCmdBindIndexBuffer(s_vk.cmd, ibuf, io, VK_INDEX_TYPE_UINT32);
++                s_e2.bound_ibuf = ibuf;
++                s_e2.bound_io = io;
++            }
 +            pvkCmdDrawIndexed(s_vk.cmd, index_count, 1, 0, s_draw_geom_vi ? s_draw_vofs : 0, 0);
 +        } else {
 +            pvkCmdDraw(s_vk.cmd, vertex_count, 1, 0, 0);
@@ -27422,7 +27436,7 @@ index e2687b7..1889a93 100644
      if (vk_ensure_vertex_buffer(vbytes)) return;
      memcpy(s_vk.vertices.ptr, vertices, (size_t)vbytes);
      if (indices && index_count) {
-@@ -2880,30 +7323,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2880,30 +7337,18 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      /* Everything submitted before is complete (each submission is waited
       * on); this orders memory for the surfaces this draw touches. */
      for (u32 i = 0; i < n; i++)
@@ -27460,7 +27474,7 @@ index e2687b7..1889a93 100644
      VkDeviceSize off = 0;
      pvkCmdBindVertexBuffers(s_vk.cmd, 0, 1, &s_vk.vertices.buf, &off);
      if (indices && index_count) {
-@@ -2916,6 +7347,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -2916,6 +7361,28 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      vk_submit_and_wait();
  }
  
@@ -27489,7 +27503,7 @@ index e2687b7..1889a93 100644
  static const rsx_draw_backend s_vk_engine_backend = {
      .user                 = NULL,
      .init                 = vk_eng_init,
-@@ -2930,6 +7383,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2930,6 +7397,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .depth_target_create  = vk_eng_depth_target_create,
      .depth_target_release = vk_eng_release,
      .depth_snapshot       = vk_eng_depth_snapshot,
@@ -27503,7 +27517,7 @@ index e2687b7..1889a93 100644
      .pipeline_create      = vk_eng_pipeline_create,
      .pipeline_release     = vk_eng_pipeline_release,
      .bind_targets         = vk_eng_bind_targets,
-@@ -2941,6 +7401,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -2941,6 +7415,8 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .set_viewport         = vk_eng_set_viewport,
      .set_scissor          = vk_eng_set_scissor,
      .set_stencil_ref      = vk_eng_set_stencil_ref,
@@ -27512,7 +27526,7 @@ index e2687b7..1889a93 100644
      .draw                 = vk_eng_draw,
      .clear_color          = vk_eng_clear_color,
      .clear_depth_stencil  = vk_eng_clear_depth_stencil,
-@@ -2969,8 +7431,33 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2969,8 +7445,33 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      s_vk.height = height ? height : 720;
      s_vk.dump_path = getenv("PS3RECOMP_VK_DUMP");
  
@@ -27546,7 +27560,7 @@ index e2687b7..1889a93 100644
  
      VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                .pApplicationName = "ps3recomp", .pEngineName = "ps3recomp RSX",
-@@ -2981,11 +7468,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -2981,11 +7482,35 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          ci.enabledExtensionCount   = s_vk.inst_ext_count;
          ci.ppEnabledExtensionNames = s_vk.inst_exts;
      }
@@ -27582,7 +27596,7 @@ index e2687b7..1889a93 100644
          ir = pvkCreateInstance(&ci, NULL, &s_vk.instance);
      }
      if (ir != VK_SUCCESS) { VK_LOG("vkCreateInstance failed (VkResult %d)\n", (int)ir); return -1; }
-@@ -3004,25 +7515,97 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3004,25 +7529,97 @@ static int vk_init_all(u32 width, u32 height, const char* title)
          vk_window_drop("no device can present to the window");
          if (vk_pick_device()) return -1;
      }
@@ -27684,7 +27698,7 @@ index e2687b7..1889a93 100644
      if (vk_load_device_functions()) return -1;
      if (s_vk.windowed && vk_load_wsi_device_functions())
          vk_window_drop("the driver has no swapchain functions");
-@@ -3039,11 +7622,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3039,11 +7636,15 @@ static int vk_init_all(u32 width, u32 height, const char* title)
      VK_CHECK(pvkAllocateCommandBuffers(s_vk.device, &cai, &s_vk.cmd), "vkAllocateCommandBuffers");
      VkFenceCreateInfo fci = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
      VK_CHECK(pvkCreateFence(s_vk.device, &fci, NULL, &s_vk.fence), "vkCreateFence");
@@ -27701,7 +27715,7 @@ index e2687b7..1889a93 100644
      if (vk_create_image(&s_vk.depth, s_vk.depth_format, s_vk.width, s_vk.height,
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) return -1;
-@@ -3097,13 +7684,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -3097,13 +7698,14 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
       * pipeline from the guest's programs, so without them it has nothing to
       * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
@@ -27718,7 +27732,7 @@ index e2687b7..1889a93 100644
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
             s_vk.width, s_vk.height, (int)s_vk.depth_format, title ? title : "");
      return 0;
-@@ -3125,7 +7713,9 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3125,7 +7727,9 @@ void rsx_vulkan_backend_shutdown(void)
      }
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
@@ -27728,7 +27742,7 @@ index e2687b7..1889a93 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -3145,6 +7735,7 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3145,6 +7749,7 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -27736,7 +27750,7 @@ index e2687b7..1889a93 100644
          if (s_vk.fence) pvkDestroyFence(s_vk.device, s_vk.fence, NULL);
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          pvkDestroyDevice(s_vk.device, NULL);
-@@ -3160,9 +7751,10 @@ int rsx_vulkan_backend_pump_messages(void)
+@@ -3160,9 +7765,10 @@ int rsx_vulkan_backend_pump_messages(void)
      if (!s_vk.windowed) return 0;
      int quit = 0;
      SDL_Event e;
@@ -27748,7 +27762,7 @@ index e2687b7..1889a93 100644
      }
      return quit ? -1 : 0;
  }
-@@ -3186,4 +7778,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
+@@ -3186,4 +7792,4 @@ u32 rsx_vulkan_backend_guest_draws(void)
      return s_vk.eng_active ? rsx_draw_engine_guest_draws() : s_g.last_draws;
  }
  
