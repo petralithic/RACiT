@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 5
       - name: Install Vulkan and SDL2 headers
         run: |
           sudo apt-get update
@@ -127,6 +127,15 @@ jobs:
               assert(allocated == 101);
               #else
               assert(allocated == 1);
+              for (u32 probe = 0; probe < 8; probe++) {
+                  const u32 i = (home + probe) & (VK_SETC - 1u);
+                  assert(s_setc[i].set == (VkDescriptorSet)(uintptr_t)(1000 + probe));
+              }
+              const u32 ninth = (home + 8u) & (VK_SETC - 1u);
+              assert(s_setc[ninth].set == selected);
+              s_setc[ninth].key = key ^ (9ull << 32u);
+              assert(vk_eng_set_for(slot, vs_bytes, ps_bytes, s_sampler_gen) != selected);
+              assert(s_setc[ninth].set == selected && !s_setc[(home + 9u) & (VK_SETC - 1u)].key);
               #endif
               printf("Occupied probe window: %u allocations and %u writes for 101 lookups.\n", allocated, written);
           }
