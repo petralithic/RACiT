@@ -1,0 +1,93 @@
+name: Cross-version compiler cache
+on:
+  push:
+    branches: ['ci/run/racit-spu-cache-20261121']
+permissions:
+  contents: read
+jobs:
+  cache:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.19.0
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Reuse identical C objects across two generated-source roots
+        shell: bash
+        env:
+          SCCACHE_GHA_ENABLED: 'false'
+          SCCACHE_MULTILEVEL_CHAIN: disk
+          SCCACHE_CACHE_SIZE: 128M
+        run: |
+          set -euo pipefail
+          mkdir -p fixture/{disc,update}/spu
+          cat > fixture/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.22)
+          project(SpuCacheFixture C)
+          add_executable(cache-check "${GENERATED}/spu/shared.c"
+            "${GENERATED}/spu/recipe.c" "${GENERATED}/spu/metadata.c" check.c)
+          set_target_properties(cache-check PROPERTIES SUFFIX ".exe")
+          CMAKE
+          cat > fixture/check.c <<'C'
+          #include <stdio.h>
+          #include <stdlib.h>
+          int shared(int);
+          int recipe(void);
+          int metadata(void);
+          int main(int argc, char **argv) {
+              if (argc != 3 || shared(7) != 14 || recipe() != atoi(argv[1]) ||
+                  metadata() != atoi(argv[2])) return 1;
+              puts("Linked output has the expected version-specific values.");
+              return 0;
+          }
+          C
+          for version in disc update; do
+            case "$version" in disc) value=100 ;; update) value=120 ;; esac
+            dir="fixture/$version/spu"
+            printf '#include "common.h"\nint shared(int n) {return n * FACTOR;}\n' > "$dir/shared.c"
+            printf '#define FACTOR 2\n' > "$dir/common.h"
+            printf 'int recipe(void) {return %s;}\n' "$value" > "$dir/recipe.c"
+            printf '#include "version.h"\nint metadata(void) {return VERSION;}\n' > "$dir/metadata.c"
+            printf '#define VERSION %s\n' "$value" > "$dir/version.h"
+          done
+
+          root="$(cd fixture && pwd)"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            root="$(cd fixture && pwd -W)"
+            export SCCACHE_BASEDIRS="$root/disc;$root/update"
+          else
+            export SCCACHE_BASEDIRS="$root/disc:$root/update"
+          fi
+          export SCCACHE_DIR="$root/cache"
+          export SCCACHE_IDLE_TIMEOUT=60
+          sccache --start-server
+          trap 'sccache --stop-server' EXIT
+
+          for version in disc update; do
+            cmake -S fixture -B "fixture/build-$version" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang \
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache -DGENERATED="$root/$version"
+          done
+          sccache --zero-stats
+          cmake --build fixture/build-disc --parallel 2
+          fixture/build-disc/cache-check.exe 100 100
+          sccache --zero-stats
+          cmake --build fixture/build-update --parallel 2
+          fixture/build-update/cache-check.exe 120 120
+          sccache --show-stats > fixture/stats.txt
+          cat fixture/stats.txt
+          awk '$1=="Cache" && $2=="hits" && NF==3 {h=$3}
+               $1=="Cache" && $2=="misses" && NF==3 {m=$3}
+               END {if (h!=2 || m!=2) exit 1; print "Second build reused",h,"objects and compiled",m,"changed units."}' fixture/stats.txt
+          printf '#define VERSION 121\n' > fixture/update/spu/version.h
+          cmake --build fixture/build-update --parallel 2
+          fixture/build-update/cache-check.exe 120 121
