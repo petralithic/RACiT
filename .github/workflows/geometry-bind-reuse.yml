@@ -1,0 +1,53 @@
+name: Vulkan geometry binding reuse
+on:
+  push:
+    branches: ['ci/run/racit-geometry-binds-20261121']
+permissions:
+  contents: read
+jobs:
+  geometry:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Extract the applied geometry bindings and their invalidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace --include=libs/video/rsx_vulkan_backend.c ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          src=tools/ps3recomp/libs/video/rsx_vulkan_backend.c
+          awk '/^static void vk_eng_draw_batched\(/ { draw=1 }
+               draw && /^        (if \(s_vk_foreign_bind\)|const int dyn_same =|s_e2.dyn_epoch = s_bt.epoch;)/ { print; count++ }
+               END { if (count != 3) exit 1 }' "$src" > tests/geometry_epoch.inc
+          awk '/^        \/\* A new command batch or an outside draw/ { emit=1 }
+               emit && /^        return;/ { complete=1; exit }
+               emit { print }
+               END { if (!complete) exit 1 }' "$src" > tests/geometry_draw.inc
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Check Vulkan command decisions on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/geometry-bind"
+          cl /nologo /std:c++17 /EHsc /W4 tests/geometry_bind_fixture.cpp /Fo"$run/check.obj" /Fe"$run/check.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$run/check.exe"
+          exit $LASTEXITCODE
+      - name: Check Vulkan command decisions on POSIX
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/geometry-bind.XXXXXXXX")
+          c++ -std=c++17 -Wall -Wextra -Werror tests/geometry_bind_fixture.cpp -o "$run/check"
+          "$run/check"
