@@ -250,6 +250,32 @@ set any of `RSX_SHADER_CACHE`, `RSX_PIPELINE_CACHE`, `RSX_PIPELINE_LIST`, or
 unspecified paths unset for that run, so isolated runs stay out of your normal
 cache. An empty value also counts as an explicit setting.
 
+### Prepare recorded shaders on desktop
+
+After playing, close the game and run its Vulkan executable with
+`--prepare-shaders`. It compiles the recorded pipelines into the driver cache
+without opening a window or loading the disc. Use the executable for the
+version you plan to play. A direct Linux launch uses its default cache paths
+unless you supplied explicit paths during play.
+
+For a macOS launcher installation, use the cache under its data folder. Set
+`cache` and `build` to the absolute paths of that cache and the selected
+build. With the packaged loader the command is:
+
+```bash
+RSX_SHADER_CACHE="$cache/shadercache.bin" \
+RSX_PIPELINE_CACHE="$cache/pipelinecache.bin" \
+RSX_PIPELINE_LIST="$cache/pipelinelist.bin" \
+PS3RECOMP_VULKAN_LIBRARY="$build/lib/libvulkan.1.dylib" \
+VK_DRIVER_FILES="$build/lib/MoltenVK_icd.json" \
+"$build/RaCACiT" --prepare-shaders
+```
+
+If the game recorded programs in a separate file, use its `RSX_PROGRAM_LIST`
+path too. The Windows launcher still offers the same operation in its
+Shaders screen. The command reports an error if Vulkan cannot initialize or
+the cache cannot be saved.
+
 ## Keyboard menu artwork
 
 Prepare a separate archive from your own game dump with `python scripts/prepare_menu_keycaps.py ORIGINAL_GLOBAL_CACHED.PSARC PREPARED_GLOBAL_CACHED.PSARC`. The output directory must exist. The tool checks the bundled menu source and compiled actions, preserves the original archive, and records a receipt beside the prepared file. Repeating the command verifies and reuses the matching output. A changed input or output requires a fresh output path.

@@ -1633,7 +1633,7 @@ static void linux_load_settings()
 }
 
 #if defined(RACACIT_HAVE_VULKAN)
-static void linux_configure_shader_cache()
+static void linux_configure_shader_cache(bool prepare_only)
 {
     static const struct { const char* key; const char* file; } cache_files[] = {
         { "RSX_SHADER_CACHE", "shadercache.bin" },
@@ -1647,7 +1647,7 @@ static void linux_configure_shader_cache()
         if (getenv(entry.key)) return;
 
     const char* backend = getenv("RACACIT_RSX");
-    if (backend && strcmp(backend, "null") == 0) return;
+    if (!prepare_only && backend && strcmp(backend, "null") == 0) return;
     const fs::path dir = linux_user_directory("XDG_CACHE_HOME", ".cache");
     if (dir.empty()) return;
     std::error_code error;
@@ -1659,13 +1659,56 @@ static void linux_configure_shader_cache()
 #endif
 #endif
 
+#if defined(RACACIT_HAVE_VULKAN) && !defined(__ANDROID__)
+static bool shader_prepare_requested(int argc, char** argv)
+{
+    if (argc > 1 && strcmp(argv[1], "--prepare-shaders") == 0) return true;
+#ifdef _WIN32
+    const char* prepare = getenv("RACACIT_PREPARE");
+    return prepare && *prepare == '1';   /* the Windows launcher */
+#else
+    return false;
+#endif
+}
+
+static int prepare_shaders_offscreen()
+{
+    static const char* const cache_paths[] = { "RSX_SHADER_CACHE", "RSX_PIPELINE_CACHE", "RSX_PIPELINE_LIST" };
+    for (const char* key : cache_paths) {
+        const char* path = getenv(key);
+        if (!path || !*path) {
+            fprintf(stderr, "[prepare] Set %s to the cache file used during play.\n", key);
+            return 1;
+        }
+    }
+#ifdef _WIN32
+    if (_putenv_s("RACACIT_PREPARE", "1") != 0 ||
+        _putenv_s("PS3RECOMP_VK_WINDOW", "0") != 0 ||
+        _putenv_s("PS3RECOMP_VK_GUEST_PROGRAMS", "1") != 0) {
+#else
+    if (setenv("RACACIT_PREPARE", "1", 1) != 0 ||
+        setenv("PS3RECOMP_VK_WINDOW", "0", 1) != 0 ||
+        setenv("PS3RECOMP_VK_GUEST_PROGRAMS", "1", 1) != 0) {
+#endif
+        fprintf(stderr, "[prepare] Could not configure the offscreen Vulkan run.\n");
+        return 2;
+    }
+
+    const char* title = getenv("PS3_TITLE");
+    if (rsx_vulkan_backend_init(WINDOW_WIDTH, WINDOW_HEIGHT, title ? title : "RACiT") != 0) {
+        fprintf(stderr, "[prepare] Vulkan init failed\n");
+        return 2;
+    }
+    const int result = rsx_vulkan_prepare_shaders();
+    fprintf(stderr, "[prepare] finished (%d)\n", result);
+    return result == 0 ? 0 : 1;
+}
+#endif
+
 int main(int argc, char** argv)
 {
 #if defined(__linux__) && !defined(__ANDROID__)
     linux_load_settings();
-#if defined(RACACIT_HAVE_VULKAN)
-    linux_configure_shader_cache();
-#endif
 #endif
 #if defined(__APPLE__) && defined(RACACIT_HAVE_VULKAN)
     /* Preserve IEEE shader guards before SDL or the Vulkan loader starts.
@@ -1690,19 +1733,22 @@ int main(int argc, char** argv)
 #if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
     if (!racacit_cpu_ok()) { racacit_cpu_refuse(); return 1; }
 #endif
-#if defined(_WIN32) && defined(RACACIT_HAVE_VULKAN)
-    /* RACACIT_PREPARE=1 (the launcher's "Prepare shaders"): no window -- the
-     * launcher draws the progress from shaders.progress. */
-    const int prepare_only = getenv("RACACIT_PREPARE") && getenv("RACACIT_PREPARE")[0] == '1';
-    if (prepare_only) _putenv_s("PS3RECOMP_VK_WINDOW", "0");
+#if defined(RACACIT_HAVE_VULKAN) && !defined(__ANDROID__)
+    const bool prepare_only = shader_prepare_requested(argc, argv);
+#if defined(__linux__)
+    linux_configure_shader_cache(prepare_only);
+#endif
 #else
-    const int prepare_only = 0;
+    const bool prepare_only = false;
 #endif
 #if defined(_WIN32)
     windows_setup(&argc, &argv);
 #endif
     if (argc < 2 && !prepare_only) {
         printf("usage: %s <PPU ELF>\n", argv[0]);
+#if defined(RACACIT_HAVE_VULKAN) && !defined(__ANDROID__)
+        printf("       %s --prepare-shaders\n", argv[0]);
+#endif
         return 2;
     }
 
@@ -1762,23 +1808,14 @@ int main(int argc, char** argv)
         ppu_inl_clip_hole = 1;
     }
 
-#if defined(_WIN32) && defined(RACACIT_HAVE_VULKAN)
-    /* The prepare: Vulkan only, no game -- every pipeline pipelinelist.bin
-     * holds built into the cache on all cores (rsx_vulkan_prepare_shaders),
-     * shaders.stamp written, then out. */
+#if defined(RACACIT_HAVE_VULKAN) && !defined(__ANDROID__)
     if (prepare_only) {
-        const char* t = getenv("PS3_TITLE");
-        if (rsx_backend_init(WINDOW_WIDTH, WINDOW_HEIGHT, t ? t : "RACiT") != 0) {
-            fprintf(stderr, "[prepare] Vulkan init failed%c", 10);
-            fflush(stdout); fflush(stderr);
-            racacit_log_flush();
-            _exit(2);
-        }
-        const int r = rsx_vulkan_prepare_shaders();
-        fprintf(stderr, "[prepare] finished (%d)%c", r, 10);
+        const int result = prepare_shaders_offscreen();
         fflush(stdout); fflush(stderr);
+#ifdef _WIN32
         racacit_log_flush();
-        _exit(r == 0 ? 0 : 1);
+#endif
+        _exit(result);
     }
 #endif
     if (!racit_menu_archive_init()) return 1;
