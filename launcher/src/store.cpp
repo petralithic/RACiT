@@ -507,6 +507,9 @@ std::string Store::import_update(const fs::path& picked, Progress* p, std::strin
     }
     const bool replacing = fs::exists(update_dir(), ec);
     if (ec) return stop("Could not check the existing update: " + ec.message());
+    // A reimport can replace files with the same size and timestamp.
+    fs::remove(update_preparation_stamp(), ec);
+    if (ec) return stop("Could not clear the prepared update record: " + ec.message());
     if (replacing) {
         if (!delete_tree(previous)) return stop("Could not clear " + u8(previous));
         fs::rename(update_dir(), previous, ec);
@@ -542,12 +545,20 @@ static bool clone_file(const fs::path& from, const fs::path& to)
 std::string Store::prepare_update_hdd()
 {
     std::error_code ec;
+    const fs::path disc_home = hdd() / L"home";
+    const fs::path home = hdd_update() / L"home";
+    if (fs::exists(fs::symlink_status(home, ec)) && !fs::equivalent(home, disc_home, ec))
+        return "There is a separate save folder at " + u8(home) + ". Move it aside before using the disc's saves with update 1.20.";
+    fs::create_directories(disc_home, ec);
+    if (ec) return "cannot open the disc's save folder: " + ec.message();
+
+    const bool reuse_unchanged = read_text(update_preparation_stamp(), 16) == "1\n";
     const fs::path inst = hdd_update() / L"game" / L"BCUS98124";
     fs::create_directories(inst, ec);
     if (!fs::copy_file(update_dir() / L"PARAM.SFO", inst / L"PARAM.SFO", fs::copy_options::overwrite_existing, ec))
         return "cannot copy PARAM.SFO into " + u8(inst) + ": " + ec.message();
     Progress p;
-    std::string r = copy_tree(update_dir() / L"USRDIR", inst / L"USRDIR", &p);
+    std::string r = copy_tree(update_dir() / L"USRDIR", inst / L"USRDIR", &p, reuse_unchanged);
     if (!r.empty()) return r;
     const fs::path disc = hdd() / L"game" / L"BCUS98124";
     if (fs::exists(disc, ec) && fs::is_directory(disc, ec))
@@ -558,12 +569,7 @@ std::string Store::prepare_update_hdd()
                 return "cannot copy " + u8(it->path()) + " into " + u8(to);
         }
     if (ec) return "cannot read the disc's installed data: " + ec.message();
-    const fs::path disc_home = hdd() / L"home";
-    fs::create_directories(disc_home, ec);
-    if (ec) return "cannot open the disc's save folder: " + ec.message();
-    const fs::path home = hdd_update() / L"home";
-    if (fs::exists(fs::symlink_status(home, ec)) && !fs::equivalent(home, disc_home, ec))
-        return "There is a separate save folder at " + u8(home) + ". Move it aside before using the disc's saves with update 1.20.";
+    if (!reuse_unchanged) write_text_atomic(update_preparation_stamp(), "1\n");
     return {};
 }
 

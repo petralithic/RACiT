@@ -137,12 +137,12 @@ uint64_t tree_size(const fs::path& dir, uint64_t* files)
 }
 
 #ifdef _WIN32
-std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p)
+std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p, bool reuse_unchanged)
 {
     std::error_code ec;
     fs::create_directories(dst, ec);
     if (ec) return "cannot create " + u8(dst) + ": " + ec.message();
-    std::vector<char> buf(4u << 20);
+    std::vector<char> buf;
     for (auto it = fs::recursive_directory_iterator(src, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (p && p->cancel) return "cancelled";
@@ -150,6 +150,8 @@ std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p)
         const fs::path out = dst / rel;
         if (it->is_directory(ec)) { fs::create_directories(out, ec); continue; }
         if (!it->is_regular_file(ec)) continue;
+        if (reuse_unchanged && same_file_size_and_time(it->path(), out)) continue;
+        if (buf.empty()) buf.resize(4u << 20);
         if (p) p->set_line(u8(rel));
         HANDLE in = CreateFileW(it->path().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                 FILE_FLAG_SEQUENTIAL_SCAN, nullptr);

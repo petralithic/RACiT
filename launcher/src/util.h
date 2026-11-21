@@ -40,9 +40,20 @@ private:
 };
 
 uint64_t tree_size(const fs::path& dir, uint64_t* files = nullptr);
-// Copies dir's contents into dst (created), file by file, adding to p->done.
+// Only reuse size/time matches in a destination previously populated from this source.
+inline bool same_file_size_and_time(const fs::path& src, const fs::path& dst)
+{
+    std::error_code ec;
+    const auto size = fs::file_size(src, ec);
+    if (ec) return false;
+    const auto copied_size = fs::file_size(dst, ec);
+    if (ec || copied_size != size) return false;
+    const auto time = fs::last_write_time(src, ec);
+    return !ec && fs::last_write_time(dst, ec) == time && !ec;
+}
+// Copies dir's contents into dst (created), adding to p->done for bytes copied.
 // Returns "" on success, else why it stopped.
-std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p);
+std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p, bool reuse_unchanged = false);
 bool delete_tree(const fs::path& p);
 
 // Hidden child process; waits. Returns the exit code, -1 if it did not start.
