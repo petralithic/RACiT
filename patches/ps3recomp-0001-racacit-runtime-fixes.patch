@@ -37645,7 +37645,7 @@ index 4240edf..101ec75 100644
  
      if (flag_id == 0 || flag_id > SYS_EVENT_FLAG_MAX)
 diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
-index 489f8a5a..a6ce19fa 100644
+index 489f8a5a..d638e3d6 100644
 --- a/runtime/syscalls/sys_fs.c
 +++ b/runtime/syscalls/sys_fs.c
 @@ -7,6 +7,7 @@
@@ -37656,10 +37656,70 @@ index 489f8a5a..a6ce19fa 100644
  #include <stdlib.h>
  #include <errno.h>
  #include <sys/types.h>
-@@ -122,8 +123,34 @@ void ps3_vfs_ps3game_fallback(char* path, size_t cap)
-     snprintf(path, cap, "%s", alt);
- }
- 
+@@ -89,41 +90,69 @@ static void fs_normalize_sep(char* p) {
+  *
+  * All three path translators call this -- sys_fs, cellFs and ppu_fs each do
+  * their own translation (see docs), and a guest path can arrive at any of them. */
+-void ps3_vfs_ps3game_fallback(char* path, size_t cap)
++static void fs_try_disc_layout(char* path, size_t cap, int already_missing)
+ {
+-    struct stat st;
+-    if (!path || !*path || stat(path, &st) == 0)
+-        return;
+-    char* p = strstr(path, "/PS3_GAME/");
+-    if (!p) {
++    if (!path || !*path) return;
++
++    const char* disc = strstr(path, "/PS3_GAME/");
++    if (!disc) disc = strstr(path, "\\PS3_GAME\\");
++    const char* component = disc;
++    if (!component) {
+         /* The reverse: sys_fs flattens any "USRDIR/" path to <root>/USRDIR/...,
+          * which misses on a disc-layout tree. GH3's Bink movies (ATVI, INTRO --
+          * the attract loop) opened as <root>/USRDIR/DATA/MOVIES and failed. */
+-        char* u = strstr(path, "/USRDIR/");
+-        if (!u) u = strstr(path, "\\USRDIR\\");
+-        if (!u) return;
+-        char alt[1024];
+-        size_t head = (size_t)(u - path);
+-        if (head + 10 + strlen(u) >= sizeof alt) return;
+-        memcpy(alt, path, head);
+-        snprintf(alt + head, sizeof alt - head, "/PS3_GAME%s", u);
+-        fs_normalize_sep(alt);
+-        if (stat(alt, &st) == 0) snprintf(path, cap, "%s", alt);
+-        return;
++        component = strstr(path, "/USRDIR/");
++        if (!component) component = strstr(path, "\\USRDIR\\");
++        if (!component) return;   /* this path has no alternate disc layout */
+     }
++
++    struct stat st;
++    if (!already_missing && stat(path, &st) == 0) return;
++
+     char alt[1024];
+-    size_t head = (size_t)(p - path);
+-    if (head + 1 >= sizeof alt)
+-        return;
+-    memcpy(alt, path, head);
+-    snprintf(alt + head, sizeof alt - head, "/%s", p + 10);
+-    if (stat(alt, &st) != 0)
+-        return;
+-    snprintf(path, cap, "%s", alt);
++    const size_t head = (size_t)(component - path);
++    if (head >= sizeof alt) return;
++    const int length = disc
++        ? snprintf(alt, sizeof alt, "%.*s/%s", (int)head, path, component + sizeof "/PS3_GAME/" - 1)
++        : snprintf(alt, sizeof alt, "%.*s/PS3_GAME%s", (int)head, path, component);
++    if (length < 0 || (size_t)length >= sizeof alt || (size_t)length >= cap) return;
++    fs_normalize_sep(alt);
++    if (stat(alt, &st) == 0) memcpy(path, alt, (size_t)length + 1);
++}
++
++void ps3_vfs_ps3game_fallback(char* path, size_t cap)
++{
++    fs_try_disc_layout(path, cap, 0);
++}
++
 +/* Shared by raw sys_fs, the PPU filesystem and the HLE cellFs translator.
 + * The update has its own installed files but uses the same saves and trophies. */
 +int ps3_vfs_override_path(const char* guest, char* host, size_t capacity)
@@ -37679,8 +37739,8 @@ index 489f8a5a..a6ce19fa 100644
 +    if (length < 0 || (size_t)length >= capacity) return -1;
 +    fs_normalize_sep(host);
 +    return 1;
-+}
-+
+ }
+
  void sys_fs_translate_path(const char* ps3_path, char* host_path, int host_path_size)
  {
 +    const int override = ps3_vfs_override_path(ps3_path, host_path, (size_t)host_path_size);
@@ -37691,7 +37751,7 @@ index 489f8a5a..a6ce19fa 100644
      /* Lazily adopt PS3_VFS_ROOT if the root is still the default ".", so this
       * sys_fs layer points at the same place as the cellFs layer (ppu_vfs_root). */
      if (g_sys_fs_root[0] == '.' && g_sys_fs_root[1] == '\0') {
-@@ -144,6 +171,17 @@ void sys_fs_translate_path(const char* ps3_path, char* host_path, int host_path_
+@@ -144,6 +173,17 @@ void sys_fs_translate_path(const char* ps3_path, char* host_path, int host_path_
          }
      }
  
@@ -37709,7 +37769,53 @@ index 489f8a5a..a6ce19fa 100644
      /* /dev_flash is FIRMWARE, not game data. ppu_fs.cpp serves it from a real
       * dev_flash tree ($PS3_DEV_FLASH); this layer was missing the same branch, so
       * a firmware path opened through the raw syscall resolved to <root>/... and
-@@ -284,6 +322,21 @@ int64_t sys_fs_open(ppu_context* ctx)
+@@ -226,14 +266,15 @@ void sys_fs_translate_path(const char* ps3_path, char* host_path, int host_path_
+      * USRDIR-relative path under <root>/extracted does, use that. Additive: only
+      * affects paths unresolved at the primary location. */
+     struct stat st;
+-    if (stat(host_path, &st) != 0) {
+-        const char* usr = strstr(ps3_path, "/USRDIR/");
+-        if (usr) {
+-            char alt[1024];
+-            snprintf(alt, sizeof(alt), "%s/extracted/USRDIR/%s", g_sys_fs_root, usr + 8);
+-            fs_normalize_sep(alt);
+-            if (stat(alt, &st) == 0)
+-                snprintf(host_path, (size_t)host_path_size, "%s", alt);
++    if (stat(host_path, &st) == 0) return;
++    const char* usr = strstr(ps3_path, "/USRDIR/");
++    if (usr) {
++        char alt[1024];
++        snprintf(alt, sizeof(alt), "%s/extracted/USRDIR/%s", g_sys_fs_root, usr + 8);
++        fs_normalize_sep(alt);
++        if (stat(alt, &st) == 0) {
++            snprintf(host_path, (size_t)host_path_size, "%s", alt);
++            return;
+         }
+     }
+
+@@ -252,14 +293,14 @@ void sys_fs_translate_path(const char* ps3_path, char* host_path, int host_path_
+     /* Use the STRIPPED path and do not require a relative spelling: the title
+      * reports Working Path "/" and opens "/Data/Resources/first.xml", which is
+      * absolute but still means "relative to my USRDIR". */
+-    if (stat(host_path, &st) != 0) {
+-        char alt2[1024];
+-        snprintf(alt2, sizeof(alt2), "%s/USRDIR/%s", g_sys_fs_root, rel);
+-        fs_normalize_sep(alt2);
+-        if (stat(alt2, &st) == 0)
+-            snprintf(host_path, (size_t)host_path_size, "%s", alt2);
++    char alt[1024];
++    snprintf(alt, sizeof(alt), "%s/USRDIR/%s", g_sys_fs_root, rel);
++    fs_normalize_sep(alt);
++    if (stat(alt, &st) == 0) {
++        snprintf(host_path, (size_t)host_path_size, "%s", alt);
++        return;
+     }
+-    ps3_vfs_ps3game_fallback(host_path, (size_t)host_path_size);
++    fs_try_disc_layout(host_path, (size_t)host_path_size, 1);
+ }
+
+ /* ---------------------------------------------------------------------------
+@@ -284,6 +325,21 @@ int64_t sys_fs_open(ppu_context* ctx)
      const char* ps3_path = (const char*)vm_to_host(path_addr);
      char host_path[1024];
      sys_fs_translate_path(ps3_path, host_path, sizeof(host_path));
