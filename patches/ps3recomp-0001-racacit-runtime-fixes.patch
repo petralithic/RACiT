@@ -17447,10 +17447,10 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..38974897
+index 00000000..d2f24665
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2416 @@
+@@ -0,0 +1,2420 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
@@ -18370,6 +18370,7 @@ index 00000000..38974897
 +static int s_mdx, s_mdy, s_mwheel;  /* since the last take, under the lock */
 +static float s_weapon_scroll;
 +static Uint64 s_scroll_at, s_smooth_until;
++static Uint32 s_smooth_mouse;
 +static int s_scroll_smooth;
 +static unsigned s_mbtn, s_mbtn_tap; /* buttons held / pressed since the last take */
 +static int s_mtest;                 /* the test hook moved the mouse: captured from then on, as a
@@ -18419,11 +18420,14 @@ index 00000000..38974897
 +        const float y = event->y;
 +#endif
 +        const Uint64 now = SDL_GetTicks64();
-+        /* SDL2 backends can put smooth and detented input on the same mouse ID.
-+         * Keep integral samples within a detected smooth gesture in that gesture. */
-+        if (event->which == SDL_TOUCH_MOUSEID || y != truncf(y))
++        /* Only unlabeled smooth scrolling needs a grace period for integral
++         * samples. Keep the grace period with the device that produced them. */
++        const int touch = event->which == SDL_TOUCH_MOUSEID;
++        if (!touch && y != truncf(y)) {
++            s_smooth_mouse = event->which;
 +            s_smooth_until = now + 180;
-+        const int smooth = now < s_smooth_until;
++        }
++        const int smooth = touch || (event->which == s_smooth_mouse && now < s_smooth_until);
 +        if (y != 0 && (!smooth || s_opt.weapon_scroll == 2)) {
 +            expire_weapon_scroll(now);
 +            if (smooth != s_scroll_smooth) s_weapon_scroll = truncf(s_weapon_scroll);
