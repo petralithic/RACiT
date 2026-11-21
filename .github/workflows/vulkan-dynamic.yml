@@ -31,13 +31,13 @@ jobs:
           git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
           git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
           git show "2e3ed79:$patch" > "$run/baseline.patch"
-          flags=()
-          if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
+          flags=(-std=c17 -Wall -Wextra -Werror -I.)
+          if [[ "$RUNNER_OS" == Windows ]]; then flags+=(--target=x86_64-pc-windows-msvc); fi
           runtime="$root/tools/ps3recomp"
           cd "$run"
           for variant in baseline candidate; do
             selected_patch="$root/$patch"
-            extra=()
+            extra=(-UBASELINE)
             if [[ "$variant" == baseline ]]; then selected_patch="$run/baseline.patch"; extra=(-DBASELINE); fi
             git -C "$runtime" apply --ignore-whitespace --include="$file" "$selected_patch"
             awk '/^static inline u32 vk_fbs\(/ { emit=1 }
@@ -49,7 +49,7 @@ jobs:
                  emit { print }
                  emit && /^        s_e2.dyn_epoch = s_bt.epoch;/ { complete=1; exit }
                  END { if (!complete || marker!=2) exit 1 }' "$runtime/$file" > batch_dynamic.inc
-            clang -std=c17 -Wall -Wextra -Werror -I. "${flags[@]}" "${extra[@]}" \
+            clang "${flags[@]}" "${extra[@]}" \
               "$root/tests/vulkan_dynamic_fixture.c" -o check.exe
             ./check.exe
             if [[ "$variant" == baseline ]]; then
