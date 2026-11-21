@@ -28,7 +28,9 @@ jobs:
           awk '/^#define PAD_HUMAN_HOLD_MS/ { emit=1 }
                emit { print; if (/^static void pad_poll_backend\(/) poll=1; if (poll && $0 == "}") exit }' "$src" > tests/scripted_pad_poll.inc
           awk '/static int s_pf = -1; static char pf_path/ { emit=1 }
-               emit { print; if ($0 == "       } }") exit }' "$src" > tests/scripted_pad_file.inc
+               emit && /^#ifdef __ANDROID__/ { complete=1; exit }
+               emit { print }
+               END { if (!complete) exit 1 }' "$src" > tests/scripted_pad_file.inc
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         if: runner.os == 'Windows'
       - name: Check scripted and physical pad modes on Windows
