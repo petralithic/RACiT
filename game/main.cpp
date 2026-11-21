@@ -832,10 +832,20 @@ static void derive_vfs_root(const char* eboot)
     if (env && *env) { ppu_vfs_root = env; return; }
 
     strncpy(s_vfs_root, eboot, sizeof s_vfs_root - 1);
+#ifdef _WIN32
     for (char* p = s_vfs_root; *p; p++) if (*p == '\\') *p = '/';
-    /* strip EBOOT.elf, USRDIR and PS3_GAME */
-    for (int i = 0; i < 3; i++) { char* s = strrchr(s_vfs_root, '/'); if (s) *s = 0; }
-    if (!s_vfs_root[0]) strcpy(s_vfs_root, ".");
+#endif
+    /* Strip EBOOT.elf, USRDIR and PS3_GAME while keeping the filesystem root. */
+    for (int i = 0; i < 3; i++) {
+        char* slash = strrchr(s_vfs_root, '/');
+        if (!slash) { strcpy(s_vfs_root, "."); break; }
+        bool at_root = slash == s_vfs_root;
+#ifdef _WIN32
+        at_root = at_root || (slash == s_vfs_root + 2 && s_vfs_root[1] == ':');
+#endif
+        if (at_root) { slash[1] = 0; break; }
+        *slash = 0;
+    }
     ppu_vfs_root = s_vfs_root;
     /* The raw sys_fs layer (Bink's IO thread opens movies through it) reads
      * the root from the environment; without this it resolved
