@@ -1,0 +1,67 @@
+name: Linux Vulkan cache defaults
+on:
+  push:
+    branches: ['ci/run/racit-linux-cache-defaults-20261121']
+permissions:
+  contents: read
+jobs:
+  cache:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check the Linux startup cache paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/racit-cache.XXXXXXXX")
+          {
+            printf '%s\n' '#include <cstdlib>' '#include <cstring>' '#include <filesystem>' '#include <fstream>' '#include <iostream>'
+            awk '
+              /^namespace fs = std::filesystem;$/ { emit=1 }
+              /^static void linux_configure_shader_cache\(\)/ { cache=1 }
+              emit { print; if (cache && $0 == "}") exit }
+            ' game/main.cpp
+            cat <<'CPP'
+          #endif
+          int main(int argc, char** argv)
+          {
+              linux_load_settings();
+              linux_configure_shader_cache();
+              for (int i = 1; i < argc; ++i) {
+                  const char* value = getenv(argv[i]);
+                  std::cout << (value ? value : "<unset>") << '\n';
+              }
+          }
+          CPP
+          } > "$run/check.cpp"
+          c++ -std=c++17 -Wall -Wextra -Werror -DRACACIT_HAVE_VULKAN "$run/check.cpp" -o "$run/check"
+          unset XDG_CACHE_HOME XDG_CONFIG_HOME RACACIT_SETTINGS_FILE RACACIT_RSX RSX_SHADER_CACHE RSX_PIPELINE_CACHE RSX_PIPELINE_LIST RSX_PROGRAM_LIST
+          export HOME="$run/home"
+          export XDG_CONFIG_HOME="$run/config"
+          export XDG_CACHE_HOME="$run/cache with spaces"
+          keys=(RSX_SHADER_CACHE RSX_PIPELINE_CACHE RSX_PIPELINE_LIST RSX_PROGRAM_LIST)
+          filenames=(shadercache.bin pipelinecache.bin pipelinelist.bin programlist.bin)
+          expected_paths() {
+            for filename in "${filenames[@]}"; do
+              printf '%s/racit/%s\n' "$1" "$filename"
+            done
+          }
+          diff -u <(expected_paths "$XDG_CACHE_HOME") <("$run/check" "${keys[@]}")
+          test -d "$XDG_CACHE_HOME/racit"
+          diff -u <(expected_paths "$HOME/.cache") <(XDG_CACHE_HOME=relative "$run/check" "${keys[@]}")
+          test -d "$HOME/.cache/racit"
+          diff -u <(printf '%s\n' '<unset>' "$run/isolated.bin" '<unset>' '<unset>') \
+            <(XDG_CACHE_HOME="$run/unused" RSX_PIPELINE_CACHE="$run/isolated.bin" "$run/check" "${keys[@]}")
+          diff -u <(printf '%s\n' '' '<unset>' '<unset>' '<unset>') \
+            <(XDG_CACHE_HOME="$run/unused" RSX_SHADER_CACHE= "$run/check" "${keys[@]}")
+          test ! -e "$run/unused"
+          printf '%s\n' 'RACACIT_RSX=null' > "$XDG_CONFIG_HOME/racit/settings.txt"
+          diff -u <(printf '%s\n' '<unset>' '<unset>' '<unset>' '<unset>' 'null') \
+            <(XDG_CACHE_HOME="$run/cpu-only" "$run/check" "${keys[@]}" RACACIT_RSX)
+          test ! -e "$run/cpu-only"
+          echo 'Absolute and fallback cache paths, isolated overrides, and the settings-driven CPU-only path passed.'
+      - name: Check both host source profiles
+        run: python3 -B -m unittest discover -s tests -p test_update120_host.py
