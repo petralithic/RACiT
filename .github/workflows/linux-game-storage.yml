@@ -1,0 +1,58 @@
+name: Direct game storage setup
+on:
+  push:
+    branches: ['ci/run/racit-linux-storage-20261121']
+permissions:
+  contents: read
+jobs:
+  setup:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Extract the exact desktop path setup functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^static char s_vfs_root\[/ { print }
+            /^static void derive_vfs_root\(/ { emit=1; count++ }
+            emit { print; if ($0 == "}") emit=0 }
+            END { if (count != 1 || emit) exit 1 }
+          ' game/main.cpp > tests/disc_path_source.inc
+          awk '
+            /^namespace fs = std::filesystem;$/ { print }
+            /^static (fs::path linux_user_directory|bool linux_configure_game_storage)\(/ { emit=1; count++ }
+            emit { print; if ($0 == "}") emit=0 }
+            END { if (count != 2 || emit) exit 1 }
+          ' game/main.cpp > tests/linux_game_storage_source.inc
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Check Windows relative and absolute disc paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/direct-game-setup"
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_CRT_SECURE_NO_WARNINGS tests/direct_game_setup_fixture.cpp /Fe"$run/check.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Set-Location $run
+          & "./check.exe"
+          exit $LASTEXITCODE
+      - name: Check Linux disc paths and both storage layouts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/direct-game.XXXXXXXX")
+          c++ -std=c++17 -Wall -Wextra -Werror tests/direct_game_setup_fixture.cpp -o "$run/check"
+          cd "$run"
+          ./check
+      - name: Check both generated game profiles
+        if: runner.os == 'Linux'
+        run: python3 -B -m unittest discover -s tests -p test_update120_host.py
