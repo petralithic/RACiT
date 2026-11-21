@@ -1,0 +1,58 @@
+name: Linux settings check
+on:
+  push:
+    branches: ['ci/run/racit-linux-settings-20261121']
+permissions:
+  contents: read
+jobs:
+  settings:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise the Linux settings loader
+        run: |
+          python3 -B - <<'PY'
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          source = Path("game/main.cpp").read_text()
+          function = source[source.index("static void linux_load_settings()"):].split("#endif", 1)[0]
+          keys = ["RACACIT_SETTINGS_FILE", "RACACIT_MOUSE_SENS", "RACACIT_BIND_R1", "PS3_VFS_ROOT"]
+          base = {k: v for k, v in os.environ.items() if k not in keys}
+          with tempfile.TemporaryDirectory() as scratch:
+              root = Path(scratch)
+              cpp = root / "check.cpp"
+              cpp.write_text(
+                  "#include <filesystem>\n#include <fstream>\n#include <cstdlib>\n#include <iostream>\n"
+                  + function
+                  + "int main(int argc, char** argv) { linux_load_settings();"
+                    " for (int i = 1; i < argc; ++i) { auto v = getenv(argv[i]);"
+                    " std::cout << (v ? v : \"-\") << '\\n'; } }\n"
+              )
+              exe = root / "check"
+              subprocess.run(["c++", "-std=c++17", str(cpp), "-o", str(exe)], check=True)
+
+              def check(expected, **env):
+                  actual = subprocess.check_output([str(exe), *keys], env=base | env, text=True).splitlines()
+                  assert actual == expected, (actual, expected)
+
+              config = root / "config with spaces"
+              default = config / "racit" / "settings.txt"
+              check([str(default), "-", "-", "-"], XDG_CONFIG_HOME=str(config))
+              assert default.parent.is_dir()
+              default.write_bytes(b"#RACACIT_MOUSE_SENS=5\r\nRACACIT_MOUSE_SENS=1.25\r\nRACACIT_BIND_R1=Mouse4\r\nPS3_VFS_ROOT=wrong\r\n")
+              check([str(default), "1.25", "Mouse4", "-"], XDG_CONFIG_HOME=str(config))
+              check([str(default), "2.0", "Mouse4", "disc"], XDG_CONFIG_HOME=str(config), RACACIT_MOUSE_SENS="2.0", PS3_VFS_ROOT="disc")
+              custom = root / "standalone.txt"
+              custom.write_text("RACACIT_MOUSE_SENS=0.8\n")
+              check([str(custom), "0.8", "-", "-"], XDG_CONFIG_HOME=str(config), RACACIT_SETTINGS_FILE=str(custom))
+              check(["", "-", "-", "-"], XDG_CONFIG_HOME=str(config), RACACIT_SETTINGS_FILE="")
+              print("Both settings paths, launch overrides, CRLF bindings, and opt-out passed.")
+          PY
+      - name: Check generated 1.20 host sources
+        run: python3 -B -m unittest discover -s tests -p test_update120_host.py
