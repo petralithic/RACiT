@@ -1,0 +1,140 @@
+name: Combined desktop integration
+on:
+  push:
+    branches: ['ci/run/racit-combined-desktop-20261121']
+permissions:
+  contents: read
+env:
+  PS3RECOMP_COMMIT: 5244db92669b54831c6d3ebb7a96d58c4dbfa6df   # scripts/setup_windows.sh
+  SDL2_VERSION: 2.32.10
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install the native Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools zlib1g-dev ninja-build
+      - name: Compile the patched Linux runtime
+        run: |
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git "$PS3RECOMP_COMMIT"
+          git -C tools/ps3recomp checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          cmake -S tools/ps3recomp -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_FLAGS="-ffunction-sections -fdata-sections"
+          grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
+          cmake --build build/runtime --target ps3recomp_runtime --parallel 2
+      - name: Check host source generation for 1.00 and 1.20
+        run: python3 -I -m unittest discover -s tests -p test_update120_host.py
+
+  msvc:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756   # v1.13.0
+      - name: SDL2 (VC development package)
+        shell: pwsh
+        run: |
+          $v = $env:SDL2_VERSION
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$v/SDL2-devel-$v-VC.zip" -OutFile sdl.zip
+          Expand-Archive sdl.zip -DestinationPath sdl
+          New-Item -ItemType Directory -Force sdlinc | Out-Null
+          Copy-Item -Recurse "sdl/SDL2-$v/include" sdlinc/SDL2
+      - name: Launcher (cl)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force launcher/build | Out-Null
+          python -I launcher/make_icon.py launcher/build/icon.ico
+          rc /nologo /fo launcher/build/launcher.res launcher/src/launcher.rc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $v = $env:SDL2_VERSION
+          cl /nologo /std:c++17 /O2 /EHsc /utf-8 /W3 /DUNICODE /D_UNICODE /DSDL_MAIN_HANDLED /Isdlinc `
+            launcher/src/app.cpp launcher/src/gfx.cpp launcher/src/iso.cpp launcher/src/store.cpp launcher/src/util.cpp `
+            launcher/build/launcher.res /Fo"launcher/build/" /Fe"launcher/build/RaCACiT Launcher.exe" `
+            /link /SUBSYSTEM:WINDOWS /LIBPATH:"sdl/SDL2-$v/lib/x64" SDL2.lib d2d1.lib dwrite.lib windowscodecs.lib `
+            ole32.lib oleaut32.lib uuid.lib shell32.lib shlwapi.lib winhttp.lib bcrypt.lib setupapi.lib imm32.lib `
+            version.lib winmm.lib gdi32.lib user32.lib advapi32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item "sdl/SDL2-$v/lib/x64/SDL2.dll" launcher/build/
+      - name: The launcher starts (--self-test)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "launcher/build/RaCACiT Launcher.exe" -ArgumentList '--self-test' -PassThru -Wait
+          "self-test exit code: $($p.ExitCode)"
+          exit $p.ExitCode
+
+  windows-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Prepare the pinned Windows dependencies
+        shell: bash
+        run: PYTHON=python bash scripts/setup_windows.sh
+      - name: Compile the runtime with the Windows game's Vulkan and glslang configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/tools/venv/Scripts:$PATH"
+          mkdir -p build/runtime-driver
+          awk '/^# ---- the game/ { exit }
+            { sub(/CMAKE_CURRENT_LIST_DIR}\/\.\./, "CMAKE_CURRENT_LIST_DIR}/../.."); print }
+          ' windows/CMakeLists.txt > build/runtime-driver/CMakeLists.txt
+          cat >> build/runtime-driver/CMakeLists.txt <<'CMAKE'
+          add_subdirectory("${RACACIT_ROOT}/tools/ps3recomp" ps3recomp)
+          target_include_directories(ps3recomp_runtime PRIVATE "${RACACIT_ROOT}/tools/zlib")
+          CMAKE
+          cmake -S build/runtime-driver -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/windows/toolchain/zig-windows.cmake" \
+            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_WIN_USE_SDL2=ON -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DPS3RECOMP_VULKAN_INCLUDE_DIR="$PWD/tools/Vulkan-Headers/include" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
+          cmake --build build/runtime --target ps3recomp_runtime --parallel 2
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install dependencies on the hosted runner
+        run: brew install sdl2 sdl3 glslang spirv-cross vulkan-headers
+      - name: Build and self-test the desktop launcher
+        shell: bash
+        run: bash mac/build_launcher.sh
+      - name: Compile the runtime with Vulkan and glslang
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash mac/setup_macos.sh
+          cmake -S tools/ps3recomp -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix sdl2)" \
+            -DPS3RECOMP_VULKAN_INCLUDE_DIR="$(brew --prefix vulkan-headers)/include" \
+            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
+          cmake --build build/runtime --target ps3recomp_runtime --parallel 2
