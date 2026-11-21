@@ -62,6 +62,11 @@ put_build() {   # GAME_BINARY BUILD_DIR
     mkdir -p "$B/lib"
     cp "$game" "$B/RaCACiT"; chmod 755 "$B/RaCACiT"
     echo "$VER" > "$B/version.txt"
+    # The packager also accepts older game binaries. Only advertise the command
+    # when the binary being bundled contains the option used by its game runner.
+    if strings -a "$B/RaCACiT" | grep -Fxq -- '--prepare-shaders'; then
+        touch "$B/prepare-shaders.flag"
+    fi
     # The game build's own caches, when they sit beside the binary (the launcher seeds data/cache from them).
     for c in shadercache.bin pipelinelist.bin; do [ -f "$(dirname "$game")/$c" ] && cp "$(dirname "$game")/$c" "$B/"; done
     # Libraries: what the game links, plus what it dlopen()s -- the Vulkan loader

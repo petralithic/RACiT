@@ -1660,9 +1660,11 @@ static void linux_configure_shader_cache(bool prepare_only)
 #endif
 
 #if defined(RACACIT_HAVE_VULKAN) && !defined(__ANDROID__)
+static constexpr char kPrepareShadersArgument[] = "--prepare-shaders";
+
 static bool shader_prepare_requested(int argc, char** argv)
 {
-    if (argc > 1 && strcmp(argv[1], "--prepare-shaders") == 0) return true;
+    if (argc > 1 && strcmp(argv[1], kPrepareShadersArgument) == 0) return true;
 #ifdef _WIN32
     const char* prepare = getenv("RACACIT_PREPARE");
     return prepare && *prepare == '1';   /* the Windows launcher */
@@ -1747,7 +1749,7 @@ int main(int argc, char** argv)
     if (argc < 2 && !prepare_only) {
         printf("usage: %s <PPU ELF>\n", argv[0]);
 #if defined(RACACIT_HAVE_VULKAN) && !defined(__ANDROID__)
-        printf("       %s --prepare-shaders\n", argv[0]);
+        printf("       %s %s\n", argv[0], kPrepareShadersArgument);
 #endif
         return 2;
     }

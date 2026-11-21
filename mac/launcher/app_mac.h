@@ -34,6 +34,7 @@ typedef unsigned long long ULONGLONG;
 #define TRUE 1
 #define FALSE 0
 #define INFINITE 0xFFFFFFFFu
+#define WAIT_TIMEOUT 258u
 
 enum : UINT {
     WM_DESTROY = 0x0002, WM_SIZE = 0x0005, WM_PAINT = 0x000F, WM_CLOSE = 0x0010, WM_ERASEBKGND = 0x0014,
@@ -135,7 +136,7 @@ inline BOOL GlobalUnlock(HANDLE) { return TRUE; }
 inline BOOL CloseClipboard() { mac::clipboard.clear(); return TRUE; }
 
 // The game's process (Store::launch hands back a ChildProcess).
-inline DWORD WaitForSingleObject(HANDLE h, DWORD ms) { return child_wait((ChildProcess*)h, ms == INFINITE ? -1 : (int)ms) ? 0 : 258; }
+inline DWORD WaitForSingleObject(HANDLE h, DWORD ms) { return child_wait((ChildProcess*)h, ms == INFINITE ? -1 : (int)ms) ? 0 : WAIT_TIMEOUT; }
 inline BOOL GetExitCodeProcess(HANDLE h, DWORD* code) { *code = (DWORD)child_exit_code((ChildProcess*)h); return TRUE; }
 inline BOOL TerminateProcess(HANDLE h, UINT code) { child_terminate((ChildProcess*)h, (int)code); return TRUE; }
 inline BOOL CloseHandle(HANDLE h) { child_free((ChildProcess*)h); return TRUE; }

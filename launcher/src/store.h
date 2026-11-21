@@ -206,8 +206,7 @@ public:
     // Every settings.txt value also goes in the environment and the game's
     // EBOOT on the command line, so builds that only read the settings.txt
     // beside their exe (v65 and older) get them too.
-    // prepare: the shader prepare instead (RACACIT_PREPARE=1: no window, no game, every
-    // pipeline in data\cache\pipelinelist.bin built on all cores, then it exits; Windows only).
+    // prepare: build recorded pipelines offscreen and exit before loading the game.
     std::string launch(void** process, bool prepare = false);   // Windows: a process HANDLE; macOS: a ChildProcess*
 
     // Shaders (data\cache): pipelinelist.bin (the pipelines recorded), shaders.state (the game
@@ -215,6 +214,7 @@ public:
     // (each prepare: the build and the driver it was for, the counts), shaders.progress (the
     // prepare's "state done total failed absent", rewritten while it runs).
     int shader_variants() const;
+    bool supports_shader_prepare() const;
     std::map<std::string, std::string> shader_stamp() const;
     std::map<std::string, std::string> shader_state() const;
     std::string shader_build_tag() const;            // the build selected for Play
@@ -236,6 +236,7 @@ private:
     std::string prepare_update_hdd();   // update files and the disc's installed data into hdd_update()
 #ifdef __APPLE__
 private:
-    std::string launch_mac(const BuildInfo& b, const fs::path& eboot, std::map<std::wstring, std::wstring>& set, void** process);
+    std::string launch_mac(const BuildInfo& b, const fs::path& eboot, std::map<std::wstring, std::wstring>& set,
+                           void** process, bool prepare);
 #endif
 };

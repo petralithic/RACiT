@@ -258,7 +258,10 @@ without opening a window or loading the disc. Use the executable for the
 version you plan to play. A direct Linux launch uses its default cache paths
 unless you supplied explicit paths during play.
 
-For a macOS launcher installation, use the cache under its data folder. Set
+On macOS and Windows, open Shaders in the launcher to use the same operation.
+On macOS this appears when the selected game build supports preparation.
+To run it in a terminal with a macOS launcher installation, use the cache
+under its data folder. Set
 `cache` and `build` to the absolute paths of that cache and the selected
 build. With the packaged loader the command is:
 
@@ -266,15 +269,15 @@ build. With the packaged loader the command is:
 RSX_SHADER_CACHE="$cache/shadercache.bin" \
 RSX_PIPELINE_CACHE="$cache/pipelinecache.bin" \
 RSX_PIPELINE_LIST="$cache/pipelinelist.bin" \
+RSX_PROGRAM_LIST="$cache/programlist.bin" \
 PS3RECOMP_VULKAN_LIBRARY="$build/lib/libvulkan.1.dylib" \
 VK_DRIVER_FILES="$build/lib/MoltenVK_icd.json" \
 "$build/RaCACiT" --prepare-shaders
 ```
 
-If the game recorded programs in a separate file, use its `RSX_PROGRAM_LIST`
-path too. The Windows launcher still offers the same operation in its
-Shaders screen. The command reports an error if Vulkan cannot initialize or
-the cache cannot be saved.
+Use its `RSX_PROGRAM_LIST` path if you configured a separate program list.
+The command reports an error if Vulkan cannot initialize or the cache cannot
+be saved.
 
 ## Keyboard menu artwork
 

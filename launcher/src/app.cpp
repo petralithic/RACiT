@@ -1121,26 +1121,17 @@ static void stop_game()
     confirm("Stop the game?", "Unsaved progress is lost.", "Stop it", [] { if (game_proc) TerminateProcess(game_proc, 1); });
 }
 
-// ---- shaders: Prepare shaders (the game's RACACIT_PREPARE start) --------------------------------
+// ---- shaders: Prepare shaders --------------------------------
 // The game builds each Vulkan pipeline in the background the first time it is needed, and a draw
 // that comes up before its pipeline is ready shows briefly in the wrong colours. The prepare starts
 // the game without a window and builds every pipeline recorded in data\cache\pipelinelist.bin on
 // all cores, then exits (rsx_vulkan_prepare_shaders); where a new build changed the shader text, it
-// makes the text again from programlist.bin first. Windows, A Crack in Time only.
-static bool shaders_here()
-{
-#ifdef __APPLE__
-    return false;
-#else
-    return S->prof == &kRacitProfile;
-#endif
-}
+// makes the text again from programlist.bin first.
 static const char* const k_sh_short[] = { "Ready", "None recorded yet", "Not prepared yet",
                                           "Graphics driver changed: prepare again", "New build: prepare again" };
 static void shaders_screen();
 static void prepare_shaders()
 {
-#ifndef __APPLE__
     if (prog || game_proc) return;
     void* h = nullptr;
     const std::string r = S->launch(&h, true);
@@ -1153,7 +1144,7 @@ static void prepare_shaders()
         for (;;) {
             if (p->cancel) {
                 TerminateProcess(proc, 1); WaitForSingleObject(proc, 5000); CloseHandle(proc);
-                return "Stopped. What was built so far is kept: prepare again to finish.";
+                return "Stopped. You can prepare again later.";
             }
             const DWORD w = WaitForSingleObject(proc, 200);
             int pr[5];
@@ -1173,10 +1164,10 @@ static void prepare_shaders()
         }
         DWORD code = 1; GetExitCodeProcess(proc, &code); CloseHandle(proc);
         if (code == 0) return {};
-        if (code == 2) return "Vulkan could not start, so nothing was built. Details: data\\prepare_log.txt.";
+        const std::string details = ". See " + u8(st->prepare_log()) + ".";
+        if (code == 2) return "Vulkan could not start" + details;
         char hx[32]; snprintf(hx, sizeof hx, "0x%08lX", (unsigned long)code);
-        return std::string(code == 1 ? std::string("Some pipelines could not be built") : std::string("The prepare ended with code ") + hx) +
-               ". Details: data\\prepare_log.txt.";
+        return (code == 1 ? std::string("Some pipelines could not be prepared") : std::string("The prepare ended with code ") + hx) + details;
     }, [](const std::string& r) {
         if (!r.empty()) { message("Prepare shaders", r); refresh(); return; }
         const auto stamp = S->shader_stamp();
@@ -1186,7 +1177,6 @@ static void prepare_shaders()
         message("Shaders ready", t);
         refresh();
     });
-#endif
 }
 
 static void shaders_screen()
@@ -1225,7 +1215,7 @@ static void shaders_screen()
 static bool g_sh_checked;
 static void maybe_offer_prepare()
 {
-    if (!shaders_here() || prog || game_proc || ov.type != Overlay::NONE || !S->game().ok) return;
+    if (prog || game_proc || ov.type != Overlay::NONE || !S->game().ok || !S->supports_shader_prepare()) return;
     const int st = S->shader_status();
     if (st != Store::SH_NEVER && st != Store::SH_DRIVER && st != Store::SH_BUILD) return;
     const auto state = S->shader_state();
@@ -1272,7 +1262,7 @@ static void home()
     }
     if (show_update) scr.items.push_back(button("Update available", "See what is new, then download and install it", open_updates));
     scr.items.push_back(button("Settings", "Display, graphics, controller", [] { set_screen(settings_screen); }));
-    if (shaders_here() && gi.ok) scr.items.push_back(button("Shaders", k_sh_short[S->shader_status()], [] { set_screen(shaders_screen); }));
+    if (gi.ok && S->supports_shader_prepare()) scr.items.push_back(button("Shaders", k_sh_short[S->shader_status()], [] { set_screen(shaders_screen); }));
     scr.items.push_back(button("Saves", "Back up, export, restore", [] { set_screen(saves_screen); }));
     scr.items.push_back(button("More", "Your game, mods, logs", [] { set_screen(more_screen); }));
     scr.items.push_back(button("Quit", "", [] { PostMessageW(g_hwnd, WM_CLOSE, 0, 0); }));

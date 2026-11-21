@@ -914,7 +914,7 @@ std::string Store::install_build_folder(const fs::path& from, int* version, bool
     fs::create_directories(tmp, ec);
     for (const wchar_t* f : { RACIT_GAME_EXE, L"RaCACiT_compat.exe", L"RaCACiT_BCES00511.exe", L"RaCACiT_BCES00511_compat.exe",
                               L"RaCNexus.exe", L"SDL2.dll",
-                              L"README.txt", L"version.txt", L"RaCACiT.map" })
+                              L"README.txt", L"version.txt", L"RaCACiT.map", L"prepare-shaders.flag" })
         if (fs::exists(from / f, ec)) {
             fs::copy_file(from / f, tmp / f, fs::copy_options::overwrite_existing, ec);
             if (ec) { delete_tree(tmp); return "Copying " + narrow(f) + " failed: " + ec.message(); }
@@ -1777,6 +1777,25 @@ int Store::shader_variants() const
 
 std::map<std::string, std::string> Store::shader_stamp() const { return key_values(cache() / L"shaders.stamp"); }
 std::map<std::string, std::string> Store::shader_state() const { return key_values(cache() / L"shaders.state"); }
+#ifdef __APPLE__
+static bool mac_build_can_prepare(const BuildInfo& b)
+{
+    std::error_code ec;
+    return b.version && fs::is_regular_file(b.dir / L"prepare-shaders.flag", ec);
+}
+#endif
+
+bool Store::supports_shader_prepare() const
+{
+    if (prof != &kRacitProfile) return false;
+#ifdef __APPLE__
+    const std::string title_id = game().title_id;
+    return mac_build_can_prepare(build_for(plays_update(title_id), title_id));
+#else
+    return true;
+#endif
+}
+
 std::string Store::shader_build_tag() const
 {
     const std::string title_id = game().title_id;
@@ -1815,8 +1834,11 @@ std::string Store::launch(void** process, bool prepare)
     const bool u120 = plays_update(g.title_id);
     const BuildInfo b = build_for(u120, g.title_id);
     if (!b.version) return "No build installed: reinstall the launcher.";
+#ifdef __APPLE__
+    if (prepare && !mac_build_can_prepare(b)) return "Install a game build with shader preparation to use this action.";
+#endif
     const fs::path eboot = u120 ? update_elf() : g.root / L"PS3_GAME" / L"USRDIR" / L"EBOOT.elf";
-    if (!u120) {
+    if (!prepare && !u120) {
         bool known = false;
         int version = 0;
         std::string title_id;
@@ -1826,8 +1848,11 @@ std::string Store::launch(void** process, bool prepare)
         if (!mismatch.empty()) return mismatch;
     }
     std::error_code ec;
-    fs::create_directories(hdd(), ec); fs::create_directories(cache(), ec);
-    if (u120) { const std::string r = prepare_update_hdd(); if (!r.empty()) return "Could not set up update 1.20: " + r; }
+    fs::create_directories(cache(), ec);
+    if (!prepare) {
+        fs::create_directories(hdd(), ec);
+        if (u120) { const std::string r = prepare_update_hdd(); if (!r.empty()) return "Could not set up update 1.20: " + r; }
+    }
     seed_caches(b);   // a prepare too: a new build's shipped pipelines are then built as well
     if (!prepare && ini.get("backup_on_play", "1") != "0") {
         /* A backup that cannot be made must not keep the game from starting
@@ -1889,8 +1914,7 @@ std::string Store::launch(void** process, bool prepare)
     if (!codelist.empty()) set[L"RACACIT_CODE_MODS"] = codelist;
 
 #ifdef __APPLE__
-    if (prepare) return "Preparing shaders is not available on this system yet.";
-    return launch_mac(b, eboot, set, process);
+    return launch_mac(b, eboot, set, process, prepare);
 #else
     std::wstring env;
     if (wchar_t* cur = GetEnvironmentStringsW()) {
@@ -1945,8 +1969,9 @@ std::string Store::launch(void** process, bool prepare)
 // The macOS build reads no settings.txt of its own and writes its output to stdout: the
 // same environment as on Windows, the game folder named outright (PS3_VFS_ROOT), the
 // Vulkan loader and MoltenVK beside the build (builds/vNN/lib, unless settings.txt names
-// others), and stdout + stderr into data/log.txt.
-std::string Store::launch_mac(const BuildInfo& b, const fs::path& eboot, std::map<std::wstring, std::wstring>& set, void** process)
+// others), and stdout + stderr into the log for the requested action.
+std::string Store::launch_mac(const BuildInfo& b, const fs::path& eboot, std::map<std::wstring, std::wstring>& set,
+                              void** process, bool prepare)
 {
     std::error_code ec;
     auto ours = [&](const wchar_t* k) { for (auto& kv : set) if (_wcsicmp(kv.first.c_str(), k) == 0) return true; return false; };
@@ -1955,6 +1980,8 @@ std::string Store::launch_mac(const BuildInfo& b, const fs::path& eboot, std::ma
         set[L"PS3RECOMP_VULKAN_LIBRARY"] = (lib / L"libvulkan.1.dylib").wstring();
     if (!ours(L"VK_DRIVER_FILES") && fs::exists(lib / L"MoltenVK_icd.json", ec))
         set[L"VK_DRIVER_FILES"] = (lib / L"MoltenVK_icd.json").wstring();
+    if (!ours(L"RSX_PROGRAM_LIST") && !getenv("RSX_PROGRAM_LIST"))
+        set[L"RSX_PROGRAM_LIST"] = (cache() / L"programlist.bin").wstring();
 
     std::vector<std::string> env;
     for (char** e = environ; e && *e; e++) {
@@ -1967,11 +1994,14 @@ std::string Store::launch_mac(const BuildInfo& b, const fs::path& eboot, std::ma
     for (auto& kv : set) env.push_back(narrow(kv.first) + "=" + narrow(kv.second));
 
     const fs::path exe = b.dir / RACIT_GAME_EXE;
-    fs::remove(b.dir / L"log.txt", ec);
-    launched_dir = b.dir;
+    if (!prepare) {
+        fs::remove(b.dir / L"log.txt", ec);
+        launched_dir = b.dir;
+    }
     clear_quarantine(b.dir);
     std::string why;
-    ChildProcess* c = child_start({ u8(exe), u8(eboot) }, &env, b.dir, log(), &why);
+    ChildProcess* c = child_start({ u8(exe), prepare ? "--prepare-shaders" : u8(eboot) }, &env,
+                                  b.dir, prepare ? prepare_log() : log(), &why);
     if (!c) return "Could not start " + u8(exe) + " (" + why + ").";
     *process = c;
     return {};
