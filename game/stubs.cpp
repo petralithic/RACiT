@@ -721,12 +721,16 @@ static int scrolled_quick_slot(uint32_t player, uint32_t slots, int count,
     int n = 0, start = -1;
     for (int slot = 0; slot < count; ++slot) {
         const auto id = vm_read32(slots + 4 * slot);
-        if (id >= quick_weapon_limit || !vm_read8(player + 0x10 + 0x18 * id + 0x15)) continue;
-        if (slot == cursor || (cursor < 0 && id == equipped && start < 0)) start = n;
+        const bool available = id < quick_weapon_limit && vm_read8(player + 0x10 + 0x18 * id + 0x15);
+        // Rebase an unavailable cursor to the gap between its neighbours,
+        // so one detent reaches the adjacent available slot in either direction.
+        if (slot == cursor) start = n - (!available && steps > 0);
+        if (!available) continue;
+        if (cursor < 0 && id == equipped && start < 0) start = n;
         weapons[n++] = slot;
     }
     if (!n) return -1;
-    // With no weapon selected, the first detent lands on an end of the list.
+    // With no cursor or equipped weapon to start from, choose an end.
     if (start < 0) start = steps > 0 ? -1 : 0;
     const int wrapped = (start + steps) % n;
     return weapons[(wrapped + n) % n];
