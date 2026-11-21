@@ -1,0 +1,184 @@
+name: Texture mode decode reuse
+on:
+  push:
+    branches: ['ci/run/racit-texture-mode-20261121']
+permissions:
+  contents: read
+jobs:
+  binding:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Apply the actual before and after draw engine sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=tools/ps3recomp
+          file=libs/video/rsx_draw_engine.c
+          patch=patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          git init -q "$runtime"
+          git -C "$runtime" fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C "$runtime" -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git show "546784a:$patch" > baseline.patch
+          git -C "$runtime" apply --ignore-whitespace "../../$patch"
+          git -C "$runtime" apply -R --ignore-whitespace --include="$file" "../../$patch"
+          git -C "$runtime" apply --ignore-whitespace --include="$file" ../../baseline.patch
+          cp "$runtime/$file" baseline-source.c
+          git -C "$runtime" apply -R --ignore-whitespace --include="$file" ../../baseline.patch
+          git -C "$runtime" apply --ignore-whitespace --include="$file" "../../$patch"
+          flags=()
+          if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
+          clang "${flags[@]}" -std=gnu17 -I"$runtime/include" -fsyntax-only "$runtime/$file"
+      - name: Compare texture results and decode counts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B - <<'PYTEST'
+          from pathlib import Path
+
+          def take(source, start, end):
+              pos = source.index(start)
+              return source[pos:source.index(end, pos)]
+
+          def binding(source, name):
+              block = take(source, 'static u32 sink_bind_textures(', 'static u32 sink_bind_vertex_textures(')
+              first = block.index('        /* A colour read of a depth buffer')
+              last = block.index('        s_tex_src[u] = "texture cache";', first)
+              # Stub only the backend-dependent surface search. Keep the register
+              # memo fast paths, regular texture resolve and bookkeeping intact.
+              return (block[:first] + '''
+                  if (u == 7) {
+                      textures[u] = 700;
+                      s_tex_src[u] = "colour target";
+                      continue;
+                  }
+          ''' + block[last:]).replace('sink_bind_textures(', name + '(', 1)
+
+          candidate = Path('tools/ps3recomp/libs/video/rsx_draw_engine.c').read_text()
+          baseline = Path('baseline-source.c').read_text()
+          signed = take(candidate, '#define ENG_REMAP_SIGNED_STORE', '/* A 3D texture')
+          assert signed == take(baseline, '#define ENG_REMAP_SIGNED_STORE', '/* A 3D texture')
+          Path('texture-mode-check.c').write_text(r'''
+          #include <assert.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <string.h>
+          typedef uint32_t u32;
+          typedef uint64_t u64;
+          #define RSX_BE_MAX_TEXTURES 16
+          #define ENG_INVALID 0xffffffffu
+          typedef struct {
+              u32 enabled, format, filter, wrap, control0, border_color;
+              u32 location, offset, width, height, depth, mipmaps, pitch, cubemap, remap;
+          } rsx_dsp_texture;
+          typedef struct { u32 border; } rsx_be_sampler_desc;
+          typedef struct {
+              rsx_dsp_texture t;
+              u32 handle;
+              rsx_be_sampler_desc samp;
+              u32 frame, epoch;
+              int valid, rt;
+              u32 slot, gen;
+              int enabled;
+          } eng_unit_memo;
+          typedef struct { u32 tex_gen[16]; } registers;
+          static struct {
+              registers rsx;
+              u32 frames, bind_epoch;
+              struct { int srgb_written; } surfaces[1];
+          } g;
+          static eng_unit_memo s_unit_memo[16];
+          static rsx_dsp_texture descriptors[16];
+          static float s_tex_sub[16][2];
+          static u32 s_tex_reint[16], s_tex_src_slot[16], s_tex_srgb_src, s_n_own_read;
+          static const char* s_tex_src[16];
+          static u64 s_tsub[4], s_tsub_n, s_memo_hits, s_tex_slot_cyc;
+          static u32 decodes, remaps[16];
+          static int dynamic;
+          static int eng_dyn_tex(void) { return dynamic; }
+          static int eng_surface_overwritten(u32 slot) { return 0; }
+          static void eng_surf_touch(u32 slot) { assert(slot == 0); }
+          static void eng_tex_sub_set(u32 u, const rsx_dsp_texture* t, u32 slot) { assert(slot == 0); }
+          static u64 eng_rdtsc(void) { return 0; }
+          static int eng_tex3d_ok(const rsx_dsp_texture* t) { return 0; }
+          static void rsx_dsp_get_texture(registers* state, u32 u, rsx_dsp_texture* value)
+          { assert(state == &g.rsx); *value = descriptors[u]; ++decodes; }
+          static void eng_decode_sampler(u32 f, u32 w, u32 c, rsx_be_sampler_desc* output)
+          { output->border = 0; }
+          static u32 eng_texture_slot(u32 loc, u32 off, u32 fmt, u32 w, u32 h, u32 mips,
+                                      u32 pitch, int cube, u32 remap)
+          { assert(off < 16); remaps[off] = remap; return off + 11; }
+          ''' + signed + binding(baseline, 'reference_bind') + binding(candidate, 'candidate_bind') + r'''
+          typedef u32 (*bind)(const u32*, u32, u32, u32, u32*, rsx_be_sampler_desc*);
+          typedef struct {
+              u32 mask, signed_mask, srgb, textures[16], border[16], remaps[16], decodes;
+          } result;
+          static result run(bind fn, int dyn)
+          {
+              memset(&g, 0, sizeof g);
+              memset(s_unit_memo, 0, sizeof s_unit_memo);
+              memset(remaps, 0, sizeof remaps);
+              dynamic = dyn;
+              decodes = 0;
+              g.frames = 3;
+              g.bind_epoch = 10;
+              g.surfaces[0].srgb_written = 1;
+              for (u32 u = 0; u < 16; ++u) {
+                  descriptors[u] = (rsx_dsp_texture) {
+                      .enabled = u != 5, .format = u == 3 ? 0x8B : 0x85,
+                      .filter = u == 1 ? 0 : 0xf0000000u, .offset = u, .remap = 0xAAE4u,
+                      .border_color = 123u + u
+                  };
+                  g.rsx.tex_gen[u] = 3;
+              }
+              for (u32 u = 2; u <= 4; ++u) {
+                  s_unit_memo[u] = (eng_unit_memo) {
+                      .t = descriptors[u], .handle = 100 + u, .samp = {123 + u},
+                      .frame = g.frames, .epoch = g.bind_epoch, .valid = 1,
+                      .rt = u == 4, .slot = 0, .gen = u == 3 ? 2 : 3, .enabled = 1
+                  };
+              }
+              result out = {0};
+              rsx_be_sampler_desc samplers[16] = {0};
+              s_tex_sstore = ~0u;
+              out.mask = fn(NULL, 0, ENG_INVALID, 0xBFu, out.textures, samplers);
+              out.signed_mask = s_tex_sstore;
+              out.srgb = s_tex_srgb_src;
+              out.decodes = decodes;
+              memcpy(out.remaps, remaps, sizeof remaps);
+              for (u32 u = 0; u < 16; ++u) out.border[u] = samplers[u].border;
+              return out;
+          }
+          int main(void)
+          {
+              for (int dyn = 0; dyn <= 1; ++dyn) {
+                  result before = run(reference_bind, dyn);
+                  result after = run(candidate_bind, dyn);
+                  assert(before.decodes == 9 && after.decodes == 5);
+                  before.decodes = after.decodes;
+                  assert(memcmp(&before, &after, sizeof before) == 0);
+                  assert(after.mask == 0x9Fu && after.srgb == 0x10u);
+                  assert(after.signed_mask == (dyn ? 0x0Du : 0u));
+                  assert(after.textures[2] == 102 && after.textures[3] == 103 &&
+                         after.textures[4] == 104 && after.textures[7] == 700);
+                  assert(after.remaps[0] == (0xAAE4u | (dyn ? ENG_REMAP_SIGNED_STORE : 0)));
+              }
+              puts("Matching binding, sampler and signed masks. Register decodes fell from 9 to 5 per eight-unit case.");
+              return 0;
+          }
+          ''')
+          PYTEST
+          flags=()
+          if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
+          clang "${flags[@]}" -std=gnu17 -O2 texture-mode-check.c -o texture-mode-check.exe
+          ./texture-mode-check.exe
