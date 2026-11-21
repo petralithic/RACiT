@@ -1,0 +1,67 @@
+name: Desktop guest frame timing
+on:
+  push:
+    branches: ['ci/run/racit-renderer-ab-recorder-20261121']
+permissions:
+  contents: read
+jobs:
+  timing:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Prepare both version-specific host sources and the real CMake option
+        shell: bash
+        run: |
+          set -euo pipefail
+          src=.frame-ci/src
+          mkdir -p "$src/disc" "$src/update"
+          cp game/racit-present-times.cpp "$src/"
+          awk '/^option\(RACACIT_RECORD_FRAME_INTERVALS/ { emit=1 }
+               emit { print; if ($0 == "endif()") { complete=1; exit } }
+               END { if (!complete) exit 1 }' game/CMakeLists.txt > "$src/recording.cmake"
+          cat > "$src/CMakeLists.txt" <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(check_guest_frames LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          set(HOST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${PROFILE}")
+          add_executable(${PROJECT_NAME} "${HOST_DIR}/main.cpp")
+          include(recording.cmake)
+          CMAKE
+          python -I - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from prepare_game_host import host_sources
+          for name, profile in (("disc", "BCUS98124-1.00"), ("update", "BCUS98124-1.20")):
+              source = host_sources(profile)["main.cpp"]
+              start = source.index("static unsigned long long rt_now_us(void);")
+              end = source.index("\n}\n", source.index("static void present_guest_frame(void)", start)) + 3
+              Path(f".frame-ci/src/{name}/present_guest_frame.inc").write_text(source[start:end], encoding="utf-8")
+          PY
+          cp tests/guest_frame_timing_fixture.cpp "$src/disc/main.cpp"
+          cp tests/guest_frame_timing_fixture.cpp "$src/update/main.cpp"
+      - name: Verify the default and both measurement builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .frame-ci
+          cmake -S src -B default -G Ninja -DPROFILE=disc
+          cmake --build default --parallel 2
+          (cd default && ./check_guest_frames default)
+          for profile in disc update; do
+            cmake -S src -B "$profile" -G Ninja -DPROFILE="$profile" -DRACACIT_RECORD_FRAME_INTERVALS=ON
+            cmake --build "$profile" --parallel 2
+            (cd "$profile" && ./check_guest_frames "$profile")
+          done
