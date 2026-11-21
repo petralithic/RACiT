@@ -10238,7 +10238,7 @@ index dab4380..6132681 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 5c50e4a..9db6bac 100644
+index 5c50e4a..32fe0622 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -11,6 +11,7 @@
@@ -15996,22 +15996,48 @@ index 5c50e4a..9db6bac 100644
      if (g.be->init && g.be->init(g.be->user, g.width, g.height) != 0) {
          free(g.vp_cb); g.vp_cb = NULL;
          return -1;
-@@ -1697,8 +6373,13 @@ void rsx_draw_engine_shutdown(void)
+@@ -1690,15 +6366,37 @@ void rsx_draw_engine_shutdown(void)
+         if (g.textures[i].handle) g.be->texture_release(g.be->user, g.textures[i].handle);
+     for (u32 i = 0; i < g.n_pipelines; i++)
+         if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
++    if (s_d2c_pipe && s_d2c_pipe != ENG_INVALID)
++        g.be->pipeline_release(g.be->user, s_d2c_pipe);
++    s_d2c_pipe = 0;
+     for (u32 i = 0; i < g.n_surfaces; i++)
+         if (g.surfaces[i].handle) g.be->color_target_release(g.be->user, g.surfaces[i].handle);
+-    for (u32 i = 0; i < g.n_zdepths; i++)
+-        if (g.zdepths[i].handle) g.be->depth_target_release(g.be->user, g.zdepths[i].handle);
++    for (u32 i = 0; i < g.n_zdepths; i++) {
++        eng_zdepth* z = &g.zdepths[i];
++        if (z->handle) g.be->depth_target_release(g.be->user, z->handle);
++        if (z->as_color) g.be->color_target_release(g.be->user, z->as_color);
++        if (z->as_color_spare) g.be->color_target_release(g.be->user, z->as_color_spare);
++    }
++    /* Return cached GPU handles while their backend is still alive. */
++    if (s_geom) {
++        for (u32 i = 0; i < ENG_GEOM_SETS * ENG_GEOM_WAYS; i++)
++            if (s_geom[i].state == 2) eng_geom_free(&s_geom[i]);
++    }
++    if (s_vb) {
++        for (u32 i = 0; i < ENG_VB_SETS * ENG_VB_WAYS; i++)
++            if (s_vb[i].key) eng_vb_drop(&s_vb[i]);
++    }
      if (g.ready && g.be->shutdown) g.be->shutdown(g.be->user);
  
      rsx_draw_engine_set_guest_memory(NULL, NULL);
 -    free(dc.refs); free(dc.cuts); free(dc.verts);
 +    free(dc.refs); free(dc.cuts); free(dc.verts); free(dc.arr); free(dc.idx);
      rsx_vertex_remap_destroy(&dc.ref_remap);
-+    if (s_geom) {
-+        for (u32 i = 0; i < ENG_GEOM_SETS * ENG_GEOM_WAYS; i++) if (s_geom[i].state == 2) eng_geom_free(&s_geom[i]);
-+        free(s_geom); s_geom = NULL; s_geom_on = -1;
-+        free(s_vb); s_vb = NULL; s_vb_on = -1; s_vb_held = 0;
-+    }
++    free(s_geom); s_geom = NULL; s_geom_on = -1; s_geom_bytes = s_geom_sweep_frame = 0;
++    free(s_vb); s_vb = NULL; s_vb_on = -1; s_vb_held = s_vb_sweep_frame = 0;
++    free(s_vb_occ); s_vb_occ = NULL; s_vb_occ_cap = 0;
++    free(s_vb_verts); s_vb_verts = NULL; s_vb_verts_cap = 0;
++    free(s_vb_refs); s_vb_refs = NULL; s_vb_refs_cap = 0;
++    free(s_ps_last); s_ps_last = NULL; s_ps_last_n = s_ps_last_cap = 0;
      memset(&dc, 0, sizeof dc);
      free(g.tex_staging); free(g.vp_cb); free(g.fp_cb); free(g.indices);
      const rsx_draw_backend* be = g.be;
-@@ -1719,6 +6400,25 @@ void rsx_draw_engine_method(u32 method, u32 arg)
+@@ -1719,6 +6417,25 @@ void rsx_draw_engine_method(u32 method, u32 arg)
      rsx_dispatch_method(&g.rsx, m, arg);
  }
  
@@ -16037,7 +16063,7 @@ index 5c50e4a..9db6bac 100644
  void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
                                          u32 pitch, u32 width, u32 height)
  {
-@@ -1745,10 +6445,363 @@ void rsx_draw_engine_present(void)
+@@ -1745,10 +6462,363 @@ void rsx_draw_engine_present(void)
       * a runner that both consumes 0xE944 and calls here would otherwise
       * re-present a double-buffered title's OTHER scanout. Presenting twice is
       * harmless either way -- the engine never clears the surface, so a second
