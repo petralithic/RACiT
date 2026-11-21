@@ -231,6 +231,7 @@ public:
     void collect_log();
     fs::path launched_dir;
 private:
+    friend struct UpdateReuseFixture;
     bool plays_update(const std::string& title_id) const;
     BuildInfo build_for(bool update120, const std::string& title_id) const;
     fs::path update_preparation_stamp() const { return hdd_update() / L"update-files-prepared.txt"; }

@@ -1,0 +1,44 @@
+name: Desktop update staging reuse
+on:
+  push:
+    branches: ['ci/run/racit-update-reuse-20261121']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Exercise update staging reuse on Windows
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/update-reuse-fixture"
+          cl /nologo /std:c++17 /EHsc /utf-8 /W3 /DUNICODE /D_UNICODE /Ilauncher/src `
+            tests/update_reuse_fixture.cpp launcher/src/store.cpp launcher/src/iso.cpp launcher/src/util.cpp `
+            /Fe"$run/update-reuse.exe" /link ole32.lib oleaut32.lib uuid.lib shell32.lib shlwapi.lib `
+            winhttp.lib bcrypt.lib setupapi.lib imm32.lib version.lib winmm.lib gdi32.lib user32.lib advapi32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$run/update-reuse.exe" "$run/state"
+          exit $LASTEXITCODE
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise update staging reuse on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/update-reuse.XXXXXXXX")
+          clang++ -std=c++17 -fobjc-arc -Ilauncher/src -Imac/launcher \
+            -c mac/launcher/util_mac.mm -o "$run/util_mac.o"
+          clang++ -std=c++17 -Ilauncher/src -Imac/launcher tests/update_reuse_fixture.cpp \
+            launcher/src/store.cpp launcher/src/iso.cpp launcher/src/util.cpp "$run/util_mac.o" \
+            -lcurl -framework AppKit -framework CoreFoundation -o "$run/update-reuse"
+          "$run/update-reuse" "$run/state"
