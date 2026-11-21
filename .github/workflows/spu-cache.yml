@@ -45,7 +45,7 @@ jobs:
           int recipe(void);
           int metadata(void);
           int main(int argc, char **argv) {
-              if (argc != 3 || shared(7) != 14 || recipe() != atoi(argv[1]) ||
+              if (argc != 4 || recipe() != atoi(argv[1]) || shared(7) != 7 * atoi(argv[3]) ||
                   metadata() != atoi(argv[2])) return 1;
               puts("Linked output has the expected version-specific values.");
               return 0;
@@ -80,15 +80,16 @@ jobs:
           done
           sccache --zero-stats
           cmake --build fixture/build-disc --parallel 2
-          fixture/build-disc/cache-check.exe 100 100
+          fixture/build-disc/cache-check.exe 100 100 2
           sccache --zero-stats
           cmake --build fixture/build-update --parallel 2
-          fixture/build-update/cache-check.exe 120 120
+          fixture/build-update/cache-check.exe 120 120 2
           sccache --show-stats > fixture/stats.txt
           cat fixture/stats.txt
           awk '$1=="Cache" && $2=="hits" && NF==3 {h=$3}
                $1=="Cache" && $2=="misses" && NF==3 {m=$3}
                END {if (h!=2 || m!=2) exit 1; print "Second build reused",h,"objects and compiled",m,"changed units."}' fixture/stats.txt
           printf '#define VERSION 121\n' > fixture/update/spu/version.h
+          printf '#define FACTOR 3\n' > fixture/update/spu/common.h
           cmake --build fixture/build-update --parallel 2
-          fixture/build-update/cache-check.exe 120 121
+          fixture/build-update/cache-check.exe 120 121 3
