@@ -10,7 +10,10 @@ twice. No game files.
     python -m unittest discover -s tests
 """
 import ast
+import hashlib
+import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,26 +35,21 @@ def recipe():
     return names
 
 
-# patch_lift.py's definitions (everything before it reads its arguments), for the update
-# 1.20 path: that profile is only chosen for its own executable, which a test doesn't
-# have, so the test calls the camera pass with the profile itself.
+# Read the update camera table without executing the CLI.
 PREFIX_END = "if len(sys.argv) > 1 and sys.argv[1] == '--check-profile':"
 U120_DRIVER = r'''
 import sys
-path, recomp = sys.argv[1], sys.argv[2]
+path, prefix_end = sys.argv[1:3]
 source = open(path, encoding='utf-8').read()
 namespace = {'__file__': path, '__name__': 'patch_lift'}
 sys.path.insert(0, __import__('os').path.dirname(path))
-exec(compile(source[:source.index(sys.argv[3])], path, 'exec'), namespace)
-if sys.argv[4] == 'table':
-    print(repr(namespace['MOUSE_CAMERA_FUNCS']['BCUS98124-1.20']))
-else:
-    namespace['apply_mouse_cameras'](recomp, 'BCUS98124-1.20')
+exec(compile(source[:source.index(prefix_end)], path, 'exec'), namespace)
+print(repr(namespace['MOUSE_CAMERA_FUNCS']['BCUS98124-1.20']))
 '''
 
 
 def update120_cameras():
-    out = subprocess.run([sys.executable, '-I', '-c', U120_DRIVER, str(PATCH_LIFT), '', PREFIX_END, 'table'],
+    out = subprocess.run([sys.executable, '-I', '-c', U120_DRIVER, str(PATCH_LIFT), PREFIX_END],
                          check=True, capture_output=True, text=True).stdout
     return ast.literal_eval(out.strip())
 
@@ -85,19 +83,45 @@ def old_patched_follow(names, update120=False):
 
 
 class MouseRepatch(unittest.TestCase):
-    def lift(self, directory, follow, cameras=None):
+    def lift(self, directory, follow, cameras=None, *, update120=False):
         names = recipe()
         cameras = cameras or names['_DISC_CAMERAS']
         parts = ['#include "ppu_recomp.h"\n', names['OLD_MOUSE_DECL'] if 'racit_camera_take' in follow else '']
         for name, func in sorted(cameras.items()):
             parts.append(follow if name == 'follow' else self.lock_function(func) if name == 'lock'
                          else camera_function(func, names['MOUSE_CAMERAS'][name]))
+        if update120:
+            hud, equip, menu, redraw, highlight, apply = ('001E4BF8', '001E5914', '0020FAD8', '0021005C', '002101B0', '0021032C')
+        else:
+            hud, equip, menu, redraw, highlight, apply = ('001E4BC0', '001E58DC', '0020FA88', '0020FFD4', '00210128', '002102A4')
+        parts.append('void func_%s(ppu_context* ctx) {\nloc_%s:\n        return;\n}\n' % (hud, equip))
+        parts.append('void func_%s(ppu_context* ctx) {\nloc_%s:\nloc_%s:\nloc_%s:\n        return;\n}\n' %
+                     (menu, redraw, highlight, apply))
         path = Path(directory) / 'ppu_recomp_000.cpp'
         path.write_text(''.join(parts), encoding='utf-8')
         return path
 
     def patch_update120(self, directory):
-        result = subprocess.run([sys.executable, '-I', '-c', U120_DRIVER, str(PATCH_LIFT), directory, PREFIX_END, 'patch'],
+        # Use the real entry point and a private profile for a synthetic executable.
+        fixture = Path(directory) / 'update-fixture'
+        scripts = fixture / 'scripts'
+        versions = fixture / 'versions'
+        scripts.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(exist_ok=True)
+        for name in ('patch_lift.py', 'game_version.py', 'update120_hooks.py', 'fix_vmx_alias.py'):
+            shutil.copyfile(ROOT / 'scripts' / name, scripts / name)
+        elf = fixture / 'EBOOT.ELF'
+        elf.write_bytes(b'synthetic North American update')
+        digest = hashlib.sha256(elf.read_bytes()).hexdigest()
+        profiles = json.loads((ROOT / 'versions' / 'profiles.json').read_text(encoding='utf-8'))
+        for profile in profiles['profiles']:
+            if profile['id'] == 'BCUS98124-1.20':
+                profile['elf_sha256'] = digest
+        (versions / 'profiles.json').write_text(json.dumps(profiles), encoding='utf-8')
+        recipe = {'schema': 1, 'profile': 'BCUS98124-1.20', 'elf_sha256': digest, 'hooks': [], 'preamble': ''}
+        (versions / 'BCUS98124-1.20-hooks.json').write_text(json.dumps(recipe), encoding='utf-8')
+        result = subprocess.run([sys.executable, '-B', '-I', str(scripts / 'patch_lift.py'), directory,
+                                 '--elf', str(elf), '--profile', 'BCUS98124-1.20'],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
@@ -134,13 +158,17 @@ class MouseRepatch(unittest.TestCase):
             # by the 1.20 camera pass.
             cameras = update120_cameras()
             self.assertNotEqual(cameras, names['_DISC_CAMERAS'])
-            path = self.lift(directory, old_patched_follow(names, update120=True), cameras)
+            path = self.lift(directory, old_patched_follow(names, update120=True), cameras, update120=True)
             out = self.patch_update120(directory)
             self.assertIn('taken out', out)
             self.assertIn('mouse hooks in all 10 cameras (BCUS98124-1.20)', out)
-            _, follow = self.follow_of(path)
+            text, follow = self.follow_of(path)
             self.assertEqual(len(re.findall(r'double mouse_angles\[2\]', follow)), 1, follow)
             self.assertNotIn('racit_camera_take', follow)
+            self.assertEqual(text.count('racit_scroll_equip(ctx,'), 1)
+            self.assertEqual(text.count('racit_scroll_quick_select(ctx,'), 1)
+            self.patch_update120(directory)
+            self.assertEqual(path.read_text(encoding='utf-8'), text)
 
     def test_fresh_lift_is_patched_once(self):
         names = recipe()
@@ -200,7 +228,7 @@ class MouseRepatch(unittest.TestCase):
             func = cameras['lock']
             with self.subTest(update120=update120), tempfile.TemporaryDirectory() as directory:
                 follow = camera_function(cameras['follow'], names['MOUSE_CAMERAS']['follow'])
-                path = self.lift(directory, follow, cameras)
+                path = self.lift(directory, follow, cameras, update120=update120)
                 text = path.read_text(encoding='utf-8')
                 fresh = self.lock_function(func)
                 path.write_text(text.replace(fresh, self.old_lock(func, tilt_after_read=update120), 1), encoding='utf-8')

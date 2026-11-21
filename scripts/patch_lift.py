@@ -398,6 +398,7 @@ if options.elf:
         apply_update120_hooks(RECOMP, options.elf)
         check_mouse_camera_tables()
         apply_mouse_cameras(RECOMP, profile['id'])
+        apply_weapon_scroll(RECOMP, profile['id'])
         import subprocess
         subprocess.run([sys.executable, '-X', 'utf8', os.path.join(ROOT, 'scripts', 'fix_vmx_alias.py'), RECOMP],
                        check=True)
