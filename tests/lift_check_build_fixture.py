@@ -50,7 +50,7 @@ def main():
                     (build / "lift-patched.ok").touch()
                     (game / "CMakeLists.txt").write_text(
                         "cmake_minimum_required(VERSION 3.20)\n"
-                        "project(lift_check NONE)\n"
+                        "project(RaCACiTRecomp NONE)\n"
                         "add_custom_target(RaCACiTRecomp ALL)\n"
                         "set(RACACIT_CHECK_HOOKS ON)\n"
                         "set(_racit_profile \"${LIFT_PROFILE}\")\n"
