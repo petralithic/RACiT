@@ -1,0 +1,41 @@
+name: Controller hotplug regression
+on:
+  push:
+    branches: ['ci/run/racit-controller-hotplug-20261121']
+permissions:
+  contents: read
+jobs:
+  sdl:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev
+      - if: runner.os == 'macOS'
+        run: brew install sdl2
+      - name: Exercise the patched runtime with SDL virtual controllers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            strip_flag=-Wl,-dead_strip
+          else
+            strip_flag=-Wl,--gc-sections
+          fi
+          cc -std=gnu11 -O2 -ffunction-sections -fdata-sections -Itools/ps3recomp \
+            -I"$(sdl2-config --prefix)/include" $(sdl2-config --cflags) \
+            tests/controller_hotplug_fixture.c $(sdl2-config --libs) "$strip_flag" -lm -o "$RUNNER_TEMP/controller-hotplug"
+          "$RUNNER_TEMP/controller-hotplug"
