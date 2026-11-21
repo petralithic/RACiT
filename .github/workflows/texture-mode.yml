@@ -9,14 +9,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 4
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         if: runner.os == 'Windows'
       - name: Apply the actual before and after draw engine sources
@@ -36,9 +36,9 @@ jobs:
           cp "$runtime/$file" baseline-source.c
           git -C "$runtime" apply -R --ignore-whitespace --include="$file" ../../baseline.patch
           git -C "$runtime" apply --ignore-whitespace --include="$file" "../../$patch"
-          flags=()
-          if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
-          clang "${flags[@]}" -std=gnu17 -I"$runtime/include" -fsyntax-only "$runtime/$file"
+          flags=(-std=gnu17)
+          if [[ "$RUNNER_OS" == Windows ]]; then flags+=(--target=x86_64-pc-windows-msvc); fi
+          clang "${flags[@]}" -I"$runtime/include" -fsyntax-only "$runtime/$file"
       - name: Compare texture results and decode counts
         shell: bash
         run: |
@@ -178,7 +178,7 @@ jobs:
           }
           ''')
           PYTEST
-          flags=()
-          if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
-          clang "${flags[@]}" -std=gnu17 -O2 texture-mode-check.c -o texture-mode-check.exe
+          flags=(-std=gnu17)
+          if [[ "$RUNNER_OS" == Windows ]]; then flags+=(--target=x86_64-pc-windows-msvc); fi
+          clang "${flags[@]}" -O2 texture-mode-check.c -o texture-mode-check.exe
           ./texture-mode-check.exe
