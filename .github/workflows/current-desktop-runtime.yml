@@ -1,0 +1,91 @@
+name: Current desktop runtime integration
+on:
+  push:
+    branches: ['ci/run/racit-runtime-integration-20261121']
+permissions:
+  contents: read
+env:
+  PS3RECOMP_COMMIT: 5244db92669b54831c6d3ebb7a96d58c4dbfa6df   # scripts/setup_windows.sh
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install the native Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools zlib1g-dev ninja-build
+      - name: Compile the patched Linux runtime
+        run: |
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git "$PS3RECOMP_COMMIT"
+          git -C tools/ps3recomp checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          cmake -S tools/ps3recomp -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_FLAGS="-ffunction-sections -fdata-sections"
+          grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
+          cmake --build build/runtime --target ps3recomp_runtime --parallel 2
+
+  windows-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Prepare the pinned Windows dependencies
+        shell: bash
+        run: PYTHON=python bash scripts/setup_windows.sh
+      - name: Compile the runtime with the Windows game's Vulkan and glslang configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/tools/venv/Scripts:$PATH"
+          mkdir -p build/runtime-driver
+          awk '/^# ---- the game/ { exit }
+            { sub(/CMAKE_CURRENT_LIST_DIR}\/\.\./, "CMAKE_CURRENT_LIST_DIR}/../.."); print }
+          ' windows/CMakeLists.txt > build/runtime-driver/CMakeLists.txt
+          cat >> build/runtime-driver/CMakeLists.txt <<'CMAKE'
+          add_subdirectory("${RACACIT_ROOT}/tools/ps3recomp" ps3recomp)
+          target_include_directories(ps3recomp_runtime PRIVATE "${RACACIT_ROOT}/tools/zlib")
+          CMAKE
+          cmake -S build/runtime-driver -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/windows/toolchain/zig-windows.cmake" \
+            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_WIN_USE_SDL2=ON -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DPS3RECOMP_VULKAN_INCLUDE_DIR="$PWD/tools/Vulkan-Headers/include" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
+          cmake --build build/runtime --target ps3recomp_runtime --parallel 2
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install dependencies on the hosted runner
+        run: brew install sdl2 sdl3 glslang spirv-cross vulkan-headers
+      - name: Compile the runtime with Vulkan and glslang
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash mac/setup_macos.sh
+          cmake -S tools/ps3recomp -B build/runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix sdl2)" \
+            -DPS3RECOMP_VULKAN_INCLUDE_DIR="$(brew --prefix vulkan-headers)/include" \
+            -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          grep -q PS3RECOMP_HAVE_SPIRV_TRANSLATION build/runtime/compile_commands.json
+          cmake --build build/runtime --target ps3recomp_runtime --parallel 2
