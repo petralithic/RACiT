@@ -1,0 +1,57 @@
+name: Desktop offscreen shader preparation
+on:
+  push:
+    branches: ['ci/run/racit-desktop-prepare-shaders-20261121']
+permissions:
+  contents: read
+jobs:
+  prepare:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Extract the shader startup functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^static (bool shader_prepare_requested|int prepare_shaders_offscreen)\(/ { emit=1; count++ }
+            emit { print; if ($0 == "}") emit=0 }
+            END { if (count != 2 || emit) exit 1 }
+          ' game/main.cpp > tests/prepare_shaders_source.inc
+          awk '
+            /^namespace fs = std::filesystem;$/ { print }
+            /^static (fs::path linux_user_directory|void linux_configure_shader_cache)\(/ { emit=1; count++ }
+            emit { print; if ($0 == "}") emit=0 }
+            END { if (count != 2 || emit) exit 1 }
+          ' game/main.cpp > tests/prepare_shaders_linux_source.inc
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Check the Windows shader command and launcher protocol
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/prepare-fixture"
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_CRT_SECURE_NO_WARNINGS tests/prepare_shaders_fixture.cpp /Fe"$run/check.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Set-Location $run
+          & "./check.exe"
+          exit $LASTEXITCODE
+      - name: Check the offscreen shader command
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/prepare.XXXXXXXX")
+          c++ -std=c++17 -Wall -Wextra -Werror tests/prepare_shaders_fixture.cpp -o "$run/check"
+          cd "$run"
+          ./check
+      - name: Check generated host sources for the two game versions
+        if: runner.os == 'Linux'
+        run: python3 -B -m unittest discover -s tests -p test_update120_host.py
