@@ -17368,15 +17368,16 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..3a4ad080
+index 00000000..fd54eb37
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2309 @@
+@@ -0,0 +1,2320 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
 +#include "rsx_host_ui.h"
 +
++#include <errno.h>
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -17630,18 +17631,26 @@ index 00000000..3a4ad080
 +    char kv[40][96]; int nkv = 0;
 +    settings_lines(&o, kv, &nkv);
 +
-+    char* text = NULL; size_t len = 0;
++    char tmp[1100];
++    const int tmp_len = snprintf(tmp, sizeof tmp, "%s.tmp", path);
++    if (tmp_len < 0 || (size_t)tmp_len >= sizeof tmp) return;
++
++    char* text = NULL;
 +    FILE* f = fopen(path, "rb");
 +    if (f) {
-+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-+        if (sz > 0 && sz < (1 << 20)) {
-+            text = (char*)malloc((size_t)sz + 1);
-+            if (text) { len = fread(text, 1, (size_t)sz, f); text[len] = 0; }
++        const long sz = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
++        int complete = 0;
++        if (sz >= 0 && sz < (1 << 20) && fseek(f, 0, SEEK_SET) == 0) {
++            const size_t len = (size_t)sz;
++            text = (char*)malloc(len + 1);
++            if (text && fread(text, 1, len, f) == len && fgetc(f) == EOF && !ferror(f)) {
++                text[len] = 0;
++                complete = 1;
++            }
 +        }
-+        fclose(f);
-+    }
-+    char tmp[1100];
-+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
++        if (fclose(f) != 0 || !complete) { free(text); return; }
++    } else if (errno != ENOENT) return;
++
 +    FILE* out = fopen(tmp, "wb");
 +    if (!out) { free(text); return; }
 +    int done[sizeof kv / sizeof kv[0]] = {0};
@@ -17671,8 +17680,10 @@ index 00000000..3a4ad080
 +            if (!header++) fprintf(out, "%s# --- Set from the in-game Settings menu (F1 / Esc) ---%s", nl, nl);
 +            fprintf(out, "%s%s", kv[i], nl);
 +        }
-+    fclose(out);
++    const int written = !ferror(out);
++    const int closed = fclose(out) == 0;
 +    free(text);
++    if (!written || !closed) { remove(tmp); return; }
 +#ifdef _WIN32
 +    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING)) remove(tmp);
 +#else
