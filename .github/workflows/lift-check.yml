@@ -1,0 +1,26 @@
+name: Reuse verified lift checks
+on:
+  push:
+    branches: ['ci/run/racit-lift-check-20261121']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Windows'
+        run: python -m pip install ninja==1.13.2
+      - name: Check the real hook workflow for 1.00 and 1.20
+        run: python -B tests/lift_check_build_fixture.py
