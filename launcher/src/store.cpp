@@ -1535,28 +1535,99 @@ std::vector<fs::path> Store::backup_list() const
     return out;
 }
 
+static std::string save_tree_fingerprint(const fs::path& root)
+{
+    std::vector<std::string> records;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(root, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const auto type = it->symlink_status(ec);
+        if (ec) return {};
+        const std::string name = u8(it->path().lexically_relative(root));
+        const std::string path = std::to_string(name.size()) + ":" + name;
+        if (fs::is_directory(type)) {
+            records.push_back("D" + path + "\n");
+        } else if (fs::is_regular_file(type)) {
+            const std::string digest = sha256_file(it->path());
+            if (digest.empty()) return {};
+            records.push_back("F" + path + digest + "\n");
+        } else {
+            return {};
+        }
+    }
+    if (ec) return {};
+    std::sort(records.begin(), records.end());
+    std::string fingerprint;
+    for (const auto& record : records) fingerprint += record;
+    return fingerprint;
+}
+
+static fs::path reusable_play_backup(const fs::path& backups, const std::string& record, const std::string& fingerprint)
+{
+    const auto name_end = record.find('\n');
+    if (name_end == std::string::npos) return {};
+    const auto digest_end = record.find('\n', name_end + 1);
+    if (digest_end != name_end + 65 || record.compare(digest_end + 1, std::string::npos, fingerprint) != 0) return {};
+    const std::string name = record.substr(0, name_end);
+    const fs::path file = upath(name);
+    if (name.rfind("saves-", 0) != 0 || file != file.filename() || file.extension() != L".zip") return {};
+    const fs::path archive = backups / file;
+    return sha256_file(archive) == record.substr(name_end + 1, 64) ? archive : fs::path{};
+}
+
+static void prune_save_backups(std::vector<fs::path> backups, const fs::path& current, size_t keep)
+{
+    backups.erase(std::remove(backups.begin(), backups.end(), current), backups.end());
+    for (size_t i = 0; i + keep <= backups.size(); i++) delete_tree(backups[i]);
+}
+
 std::string Store::backup_saves(const std::string& why, fs::path* made)
 {
     if (made) made->clear();
     if (save_slots().empty()) return {};
-    const std::string stem = "saves-" + stamp_now() + "-" + why;
-    fs::path got = backups() / widen(stem + ".zip");
+    const int keep = std::max(1, atoi(ini.get("keep_backups", "8").c_str()));
+    const fs::path play_record = backups() / L"last-play-backup.txt";
+    const std::string fingerprint = why == "play" ? save_tree_fingerprint(saves()) : std::string();
+    if (!fingerprint.empty()) {
+        const fs::path existing = reusable_play_backup(backups(), read_text(play_record, 1u << 20), fingerprint);
+        if (!existing.empty()) {
+            if (made) *made = existing;
+            prune_save_backups(backup_list(), existing, keep);
+            return {};
+        }
+    }
+    const std::string base = "saves-" + stamp_now() + "-" + why;
+    fs::path got, folder;
+    std::error_code ec;
+    for (unsigned n = 0; ; ++n) {
+        char suffix[32] = "";
+        if (n) snprintf(suffix, sizeof suffix, "~%06u", n);
+        const std::string stem = base + suffix;
+        got = backups() / widen(stem + ".zip");
+        folder = backups() / widen(stem);
+        const bool zip_exists = fs::exists(got, ec);
+        if (ec) return "Could not check " + u8(got) + ": " + ec.message();
+        const bool folder_exists = fs::exists(folder, ec);
+        if (ec) return "Could not check " + u8(folder) + ": " + ec.message();
+        if (!zip_exists && !folder_exists) break;
+    }
     std::string r = zip_create(saves(), got);
     if (!r.empty()) {
         /* tar.exe missing (older or trimmed Windows), or failing on the path:
          * the save folders copied as they are instead. On Play this failure
          * used to stop the game from starting at all (GitHub #5). Listed,
          * restored and pruned like a zip. */
-        std::error_code ec; fs::remove(got, ec);
-        got = backups() / widen(stem);
+        fs::remove(got, ec);
+        got = folder;
         Progress p;
         const std::string r2 = copy_tree(saves(), got, &p);
         if (!r2.empty()) { delete_tree(got); return r + "; a plain copy failed too: " + r2; }
     }
     if (made) *made = got;
-    const int keep = std::max(1, atoi(ini.get("keep_backups", "8").c_str()));
-    auto all = backup_list();
-    for (size_t i = 0; i + keep < all.size(); i++) delete_tree(all[i]);
+    prune_save_backups(backup_list(), got, keep);
+    if (!fingerprint.empty() && got.extension() == L".zip" && save_tree_fingerprint(saves()) == fingerprint) {
+        const std::string digest = sha256_file(got);
+        if (!digest.empty()) write_text_atomic(play_record, u8(got.filename()) + "\n" + digest + "\n" + fingerprint);
+    }
     return {};
 }
 
