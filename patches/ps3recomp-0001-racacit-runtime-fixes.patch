@@ -10238,7 +10238,7 @@ index dab4380..6132681 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 5c50e4a..32fe0622 100644
+index 5c50e4a..7dc2cf38 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -11,6 +11,7 @@
@@ -12834,7 +12834,7 @@ index 5c50e4a..32fe0622 100644
      g.n_pipelines++;
      *out_fixed = fixed;
      return handle;
-@@ -1216,16 +3133,846 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1216,16 +3133,839 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
          dc.fetch_ok = 0;
          return;
      }
@@ -12935,12 +12935,11 @@ index 5c50e4a..32fe0622 100644
 +
 +/* The raw bytes behind a draw: its index runs, then the given vertex ranges.
 + * 0 = some range is not readable (never cached). */
-+/* The index runs' hash on its own, as eng_geom_content starts it (0 =
-+ * unreadable). The title rewrites its index buffers every frame, so a draw's
-+ * index pages are nearly always "written" while its vertices are not:
-+ * comparing this alone saves hashing the vertex ranges. */
++/* The title rewrites index buffers much more often than vertices. Hash the
++ * index runs first so a changed triangle list can reject a cached draw
++ * before reading any of the vertex streams. */
 +static u64 s_geom_last_ih;
-+static u64 eng_geom_icontent(void)
++static int eng_geom_index_hash(u64* hash)
 +{
 +    u64 h = 0x636F6E74656E74ull;
 +    rsx_dsp_index_array ia;
@@ -12956,28 +12955,21 @@ index 5c50e4a..32fe0622 100644
 +        if (!p) return 0;
 +        h = bytes >= 256 ? eng_hash_long(p, (size_t)bytes, h) : eng_hash_bytes(p, (size_t)bytes, h);
 +    }
-+    return h | 1u;
++    *hash = h;
++    return 1;
 +}
 +
-+static u64 eng_geom_content(u32 n_ranges, const u8* rloc, const u32* roff, const u32* rlen)
++/* expected_indices is zero when building a new fingerprint. A validation
++ * whose index runs changed cannot match, whatever the vertices contain. */
++static u64 eng_geom_content(u32 n_ranges, const u8* rloc, const u32* roff, const u32* rlen,
++                            u64 expected_indices)
 +{
 +    u64 h = 0x636F6E74656E74ull;
 +    s_geom_last_ih = 0;
 +    if (dc.n_idx) {
-+        rsx_dsp_index_array ia;
-+        rsx_dsp_get_index_array(&g.rsx, &ia);
-+        const u32 esz = ia.is_u32 ? 4u : 2u;
-+        const u32 loc = ia.location ? RSX_LOCATION_MAIN : RSX_LOCATION_LOCAL;
-+        for (u32 b = 0; b < dc.n_idx; b++) {
-+            if (!dc.idx[b].count) continue;
-+            const u64 start = (u64)ia.offset + (u64)dc.idx[b].first * esz;
-+            const u64 bytes = (u64)dc.idx[b].count * esz;
-+            if (start + bytes > 0x100000000ull) return 0;
-+            const u8* p = eng_guest_ptr(NULL, loc, (u32)start, (u32)bytes);
-+            if (!p) return 0;
-+            h = bytes >= 256 ? eng_hash_long(p, (size_t)bytes, h) : eng_hash_bytes(p, (size_t)bytes, h);
-+        }
++        if (!eng_geom_index_hash(&h)) return 0;
 +        s_geom_last_ih = h | 1u;
++        if (expected_indices && s_geom_last_ih != expected_indices) return 0;
 +    }
 +    for (u32 i = 0; i < n_ranges; i++) {
 +        const u8* p = eng_guest_ptr(NULL, rloc[i], roff[i], rlen[i]);
@@ -13523,14 +13515,14 @@ index 5c50e4a..32fe0622 100644
 +        if (!same && !rsx_ww_on() && e->checked == g.frames + 1u) {
 +            same = 1;
 +            /* RSX_ENG_VERIFY=2: still hash it, and say if the game rewrote it within the frame. */
-+            if (eng_verify(2) && eng_geom_content(e->n_ranges, e->rloc, e->roff, e->rlen) != e->content) {
++            if (eng_verify(2) && eng_geom_content(e->n_ranges, e->rloc, e->roff, e->rlen, e->icontent) != e->content) {
 +                same = 0;
 +                if (eng_verify_say("geomframe"))
 +                    fprintf(stderr, "[verify] geometry key %016llX rewritten within frame %u after its check%c",
 +                            (unsigned long long)key, g.frames, 10);
 +            }
 +        } else if (same && eng_verify(2) &&
-+            eng_geom_content(e->n_ranges, e->rloc, e->roff, e->rlen) != e->content) {
++            eng_geom_content(e->n_ranges, e->rloc, e->roff, e->rlen, e->icontent) != e->content) {
 +            same = 0;
 +            if (eng_verify_say("geom"))
 +                fprintf(stderr, "[verify] geometry key %016llX (%u ranges, first %u:0x%08X +%u) changed with no write seen (frame %u)%c",
@@ -13541,9 +13533,10 @@ index 5c50e4a..32fe0622 100644
 +        else {
 +            const u32 ww_now = rsx_ww_on() ? rsx_ww_epoch() : 0u;
 +            if (e->icontent && dc.n_idx && !eng_verify(2) && eng_geom_vunwritten(e)) {
-+                same = eng_geom_icontent() == e->icontent;      /* only the indices can differ */
++                u64 index_hash;
++                same = eng_geom_index_hash(&index_hash) && (index_hash | 1u) == e->icontent;
 +            } else {
-+                same = eng_geom_content(e->n_ranges, e->rloc, e->roff, e->rlen) == e->content;
++                same = eng_geom_content(e->n_ranges, e->rloc, e->roff, e->rlen, e->icontent) == e->content;
 +                if (same) e->icontent = s_geom_last_ih;
 +            }
 +            if (same) { e->ww_epoch = ww_now; e->checked = g.frames + 1u; }
@@ -13575,7 +13568,7 @@ index 5c50e4a..32fe0622 100644
 +        /* The full-key entry's sightings go on as on the ordinary route, and
 +         * a draw seen unchanged twice is still kept whole (a full-key hit
 +         * reads no index at all); everything before that is a block draw. */
-+        const u64 content = (e && nr) ? eng_geom_content(nr, rloc, roff, rlen) : 0;
++        const u64 content = (e && nr) ? eng_geom_content(nr, rloc, roff, rlen, 0) : 0;
 +        const int promote = e && e->state == 1 && content && e->content == content;
 +        VBST(2);
 +        const int r = (n_occ && !promote) ? eng_vb_get(layout, prim, n_occ, a, b, o) : -1;
@@ -13618,7 +13611,7 @@ index 5c50e4a..32fe0622 100644
 +     * comes at a new address every frame and is never seen again, so hashing
 +     * it here was wasted; geometry that does come back is hashed on its
 +     * second sighting and stored on its third. */
-+    const u64 content = (e && nr) ? eng_geom_content(nr, rloc, roff, rlen) : 0;
++    const u64 content = (e && nr) ? eng_geom_content(nr, rloc, roff, rlen, 0) : 0;
 +    if (!nr || (e && !content)) { s_geom_miss_nocontent++; return 0; }
 +    if (!e) s_geom_miss_new++; else if (e->content != content) s_geom_miss_changed++; else s_geom_miss_promote++;
 +
@@ -13684,7 +13677,7 @@ index 5c50e4a..32fe0622 100644
  /* ---- sink ---------------------------------------------------------------- */
  
  static void sink_begin(void* user, const rsx_dispatch* r, u32 prim)
-@@ -1234,11 +3981,26 @@ static void sink_begin(void* user, const rsx_dispatch* r, u32 prim)
+@@ -1234,11 +3974,26 @@ static void sink_begin(void* user, const rsx_dispatch* r, u32 prim)
      dc_reset();
  }
  
@@ -13712,7 +13705,7 @@ index 5c50e4a..32fe0622 100644
      dc.arr[dc.n_arr].first = first;
      dc.arr[dc.n_arr].count = count;
      dc.n_arr++;
-@@ -1256,7 +4018,7 @@ static void sink_inline_array(void* user, const rsx_dispatch* r,
+@@ -1256,7 +4011,7 @@ static void sink_inline_array(void* user, const rsx_dispatch* r,
      dc.inl = data;
      dc.inl_bytes = bytes;
      dc.n_packets++;
@@ -13721,7 +13714,7 @@ index 5c50e4a..32fe0622 100644
      dc.arr[dc.n_arr].first = 0;
      dc.arr[dc.n_arr].count = bytes / stride;
      dc.n_arr++;
-@@ -1266,7 +4028,7 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
+@@ -1266,7 +4021,7 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
  {
      (void)user; (void)r;
      dc.n_packets++;
@@ -13730,7 +13723,7 @@ index 5c50e4a..32fe0622 100644
      dc.idx[dc.n_idx].first = first;
      dc.idx[dc.n_idx].count = count;
      dc.n_idx++;
-@@ -1278,55 +4040,543 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
+@@ -1278,55 +4033,543 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
   * render-to-texture read back through a texture unit), a unit naming a
   * tracked zeta in DEPTH24_D8 samples its snapshot, and everything else is a
   * guest upload (rsx_live_draw.c:5986-6062). */
@@ -14292,7 +14285,7 @@ index 5c50e4a..32fe0622 100644
      }
      return mask;
  }
-@@ -1350,12 +4600,156 @@ static u32 sink_bind_vertex_textures(
+@@ -1350,12 +4593,156 @@ static u32 sink_bind_vertex_textures(
      return bound;
  }
  
@@ -14449,7 +14442,7 @@ index 5c50e4a..32fe0622 100644
      /* Everything that becomes triangles -- lists, strips, fans, quads, quad
       * strips and polygons -- is REBUILT into one triangle list through an
       * index buffer. A host strip topology cannot express a restart cut, which
-@@ -1368,41 +4762,68 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1368,41 +4755,68 @@ static void sink_end(void* user, const rsx_dispatch* r)
      int scratch = 0;
      const int rebuild = eng_topology_rebuild(prim, 0, &scratch) != 0;
      if (!rebuild) {
@@ -14536,7 +14529,7 @@ index 5c50e4a..32fe0622 100644
  
      /* Textures before any pipeline or target binding: a cache refresh can
       * replace a resource, and the backend is free to submit while doing it. */
-@@ -1414,28 +4835,44 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1414,28 +4828,44 @@ static void sink_end(void* user, const rsx_dispatch* r)
      memset(samplers, 0, sizeof samplers);
      memset(vtextures, 0, sizeof vtextures);
      memset(vsamplers, 0, sizeof vsamplers);
@@ -14592,7 +14585,7 @@ index 5c50e4a..32fe0622 100644
  
      /* The transform constant block, then the viewport epilogue the vertex
       * program's tail multiplies by: RSX window coordinates mapped into the
-@@ -1451,13 +4888,217 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1451,13 +4881,217 @@ static void sink_end(void* user, const rsx_dispatch* r)
          xf[5] = -((vp.translate[1] - H * 0.5f) / (H * 0.5f));
          xf[6] = vp.translate[2];
      }
@@ -14813,7 +14806,7 @@ index 5c50e4a..32fe0622 100644
      if (g.fp_cb_cap < fp_bytes) {
          u8* n = (u8*)realloc(g.fp_cb, fp_bytes);
          if (!n) return;
-@@ -1469,8 +5110,47 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1469,8 +5103,47 @@ static void sink_end(void* user, const rsx_dispatch* r)
          memcpy(g.fp_cb, g.fp_constants.values, g.fp_constants.count * 16u);
      { float* alpha = (float*)(g.fp_cb + nslots * 16u);
        alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
@@ -14862,7 +14855,7 @@ index 5c50e4a..32fe0622 100644
      /* The depth attachment is cleared the first time it is bound, so a title
       * that never clears its shadow zeta still tests against something. */
      const u32 depth_handle = (zslot != ENG_INVALID) ? g.zdepths[zslot].handle : 0;
-@@ -1482,15 +5162,50 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1482,15 +5155,50 @@ static void sink_end(void* user, const rsx_dispatch* r)
          g.zdepths[zslot].had_write = 0;
      }
  
@@ -14917,7 +14910,7 @@ index 5c50e4a..32fe0622 100644
  
      /* The guest scissor intersected with the surface. The nv40 reset is a
       * full 4096x4096 window and a never-written register reads 0 here, which
-@@ -1501,8 +5216,8 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1501,8 +5209,8 @@ static void sink_end(void* user, const rsx_dispatch* r)
          u32 sw = g.surfaces[target].w, sh = g.surfaces[target].h;
          const u32 h = rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL);
          const u32 v = rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL);
@@ -14928,7 +14921,7 @@ index 5c50e4a..32fe0622 100644
          if (gw > 0 && gh > 0) {
              u32 right = sx + sw, bottom = sy + sh;
              if (gx > sx) sx = gx;
-@@ -1517,17 +5232,342 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1517,17 +5225,342 @@ static void sink_end(void* user, const rsx_dispatch* r)
      /* Dynamic, and deliberately outside the pipeline key. */
      g.be->set_stencil_ref(g.be->user,
                            rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF) & 0xFFu);
@@ -15276,7 +15269,7 @@ index 5c50e4a..32fe0622 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -1536,6 +5576,14 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -1536,6 +5569,14 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
      if (!g.ready) return;
      u32 targets[RSX_BE_MAX_COLOR_TARGETS];
      const u32 n_targets = eng_current_target_set(targets);
@@ -15291,7 +15284,7 @@ index 5c50e4a..32fe0622 100644
      if (!n_targets) return;
  
      if (mask & (RSX_CLEAR_COLOR_R | RSX_CLEAR_COLOR_G |
-@@ -1550,31 +5598,60 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -1550,31 +5591,60 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
          /* Every target the set names, not only A: a deferred pass clears its
           * whole G-buffer in one CLEAR_SURFACE, and B, C and D would otherwise
           * keep whatever the last frame left in them. */
@@ -15359,7 +15352,7 @@ index 5c50e4a..32fe0622 100644
          }
      }
  }
-@@ -1585,16 +5662,576 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -1585,16 +5655,576 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
   * scene's draws having executed (rsx_live_draw.c:7557-7570). */
  static u32 eng_present_surface(u32 buffer_id)
  {
@@ -15940,7 +15933,7 @@ index 5c50e4a..32fe0622 100644
  static void eng_present(u32 buffer_id)
  {
      if (!g.ready) return;
-@@ -1609,9 +6246,46 @@ static void eng_present(u32 buffer_id)
+@@ -1609,9 +6239,46 @@ static void eng_present(u32 buffer_id)
                      i, g.surfaces[i].location, g.surfaces[i].offset,
                      g.surfaces[i].w, g.surfaces[i].h, g.surfaces[i].handle);
      }
@@ -15987,7 +15980,7 @@ index 5c50e4a..32fe0622 100644
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
  }
-@@ -1661,6 +6335,8 @@ int rsx_draw_engine_init(u32 width, u32 height)
+@@ -1661,6 +6328,8 @@ int rsx_draw_engine_init(u32 width, u32 height)
      g.height = height ? height : 720;
      g.vp_cb = (u8*)calloc(1, ENG_VP_CB_BYTES);
      if (!g.vp_cb) return -1;
@@ -15996,7 +15989,7 @@ index 5c50e4a..32fe0622 100644
      if (g.be->init && g.be->init(g.be->user, g.width, g.height) != 0) {
          free(g.vp_cb); g.vp_cb = NULL;
          return -1;
-@@ -1690,15 +6366,37 @@ void rsx_draw_engine_shutdown(void)
+@@ -1690,15 +6359,37 @@ void rsx_draw_engine_shutdown(void)
          if (g.textures[i].handle) g.be->texture_release(g.be->user, g.textures[i].handle);
      for (u32 i = 0; i < g.n_pipelines; i++)
          if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
@@ -16037,7 +16030,7 @@ index 5c50e4a..32fe0622 100644
      memset(&dc, 0, sizeof dc);
      free(g.tex_staging); free(g.vp_cb); free(g.fp_cb); free(g.indices);
      const rsx_draw_backend* be = g.be;
-@@ -1719,6 +6417,25 @@ void rsx_draw_engine_method(u32 method, u32 arg)
+@@ -1719,6 +6410,25 @@ void rsx_draw_engine_method(u32 method, u32 arg)
      rsx_dispatch_method(&g.rsx, m, arg);
  }
  
@@ -16063,7 +16056,7 @@ index 5c50e4a..32fe0622 100644
  void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
                                          u32 pitch, u32 width, u32 height)
  {
-@@ -1745,10 +6462,363 @@ void rsx_draw_engine_present(void)
+@@ -1745,10 +6455,363 @@ void rsx_draw_engine_present(void)
       * a runner that both consumes 0xE944 and calls here would otherwise
       * re-present a double-buffered title's OTHER scanout. Presenting twice is
       * harmless either way -- the engine never clears the surface, so a second
