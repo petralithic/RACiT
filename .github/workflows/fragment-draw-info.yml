@@ -1,0 +1,57 @@
+name: Fragment draw metadata reuse
+on:
+  push:
+    branches: ['ci/run/racit-fragment-draw-info-20261121']
+permissions:
+  contents: read
+jobs:
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Compare fragment hashes, constants, sampled units and decode work
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=tools/ps3recomp
+          file=libs/video/rsx_fp_decompiler.c
+          test_file=libs/video/tests/test_fp_decompiler.c
+          patch=patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          git init -q "$runtime"
+          git -C "$runtime" fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C "$runtime" -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git show "8eb047a:$patch" > baseline.patch
+          flags=(-std=gnu17 -O2 -I"$runtime/include" -I"$runtime/libs/video")
+          if [[ "$RUNNER_OS" == Windows ]]; then flags+=(--target=x86_64-pc-windows-msvc); fi
+          count_words() {
+            awk '/^u32 rsx_fp_read_word\(/ { print "unsigned test_word_reads;"; count=1 }
+                 { print }
+                 count && /^\{/ { print "    test_word_reads++;"; count=0 }' "$1" > decompiler-counted.c
+          }
+          git -C "$runtime" apply --ignore-whitespace --include="$file" --include='libs/video/rsx_fp_decompiler.h' ../../baseline.patch
+          count_words "$runtime/$file"
+          clang "${flags[@]}" -DBASELINE .github/tests/fragment-draw-info.c decompiler-counted.c -o baseline.exe
+          ./baseline.exe > baseline.txt
+          git -C "$runtime" apply -R --ignore-whitespace --include="$file" --include='libs/video/rsx_fp_decompiler.h' ../../baseline.patch
+          git -C "$runtime" apply --ignore-whitespace "../../$patch"
+          clang "${flags[@]}" -fsyntax-only "$runtime/libs/video/rsx_draw_engine.c"
+          clang "${flags[@]}" "$runtime/$test_file" "$runtime/$file" -o decompiler.exe
+          ./decompiler.exe
+          count_words "$runtime/$file"
+          awk '/^typedef struct .* eng_fragment_info;/ {take=1}
+               /^static u32 sink_bind_textures\(/ && take {exit}
+               take {print}' "$runtime/libs/video/rsx_draw_engine.c" > draw-info.inc
+          clang "${flags[@]}" -I. .github/tests/fragment-draw-info.c decompiler-counted.c -o candidate.exe
+          ./candidate.exe > candidate.txt
+          cmp baseline.txt candidate.txt
+          echo 'All tested structural hashes, inline constants, sampled masks and malformed-input results agreed.'
