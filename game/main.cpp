@@ -1642,6 +1642,48 @@ static void linux_load_settings()
     }
 }
 
+static bool linux_configure_game_storage(bool update)
+{
+    const char* hdd_override = getenv("PS3_HDD0_ROOT");
+    const bool default_hdd = !hdd_override || !*hdd_override;
+    const fs::path user_data = linux_user_directory("XDG_DATA_HOME", ".local/share");
+    const fs::path default_parent = user_data.empty() ? fs::path("gamedata") : user_data;
+    std::error_code error;
+    fs::path disc_hdd = default_parent / "dev_hdd0";
+    const fs::path legacy_hdd = "gamedata/dev_hdd0";
+    if (!fs::is_directory(disc_hdd, error) && fs::is_directory(legacy_hdd, error))
+        disc_hdd = legacy_hdd;
+    const fs::path hdd = default_hdd ? (update ? default_parent / "dev_hdd0_u120" : disc_hdd)
+                                    : fs::path(hdd_override);
+
+    if (update) {
+        const char* disc_root = getenv("PS3_VFS_ROOT");
+        if (!disc_root || !*disc_root || !fs::is_directory(fs::path(disc_root) / "PS3_GAME", error)) {
+            fprintf(stderr, "Update 1.20 needs PS3_VFS_ROOT set to the folder containing the original PS3_GAME.\n");
+            return false;
+        }
+        const fs::path installed_update = hdd / "game" / "BCUS98124";
+        const char* sfo_override = getenv("PS3_UPDATE_PARAM_SFO");
+        const fs::path sfo = sfo_override && *sfo_override ? fs::path(sfo_override) : installed_update / "PARAM.SFO";
+        if (!fs::is_regular_file(sfo, error) || !fs::is_directory(installed_update / "USRDIR", error)) {
+            fprintf(stderr, "Install the North American update in %s, with PARAM.SFO and USRDIR.\n", installed_update.c_str());
+            return false;
+        }
+        setenv("PS3_UPDATE_PARAM_SFO", sfo.c_str(), 1);
+        const char* home_override = getenv("PS3_HDD0_HOME_ROOT");
+        if (default_hdd && (!home_override || !*home_override))
+            setenv("PS3_HDD0_HOME_ROOT", (disc_hdd / "home").c_str(), 1);
+    } else {
+        fs::create_directories(hdd, error);
+        if (error) {
+            fprintf(stderr, "Could not create the game data directory %s.\n", hdd.c_str());
+            return false;
+        }
+    }
+    if (default_hdd) setenv("PS3_HDD0_ROOT", hdd.c_str(), 1);
+    return true;
+}
+
 #if defined(RACACIT_HAVE_VULKAN)
 static void linux_configure_shader_cache(bool prepare_only)
 {
@@ -1763,6 +1805,14 @@ int main(int argc, char** argv)
 #endif
         return 2;
     }
+#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef RACACIT_GAME_PROFILE_ID
+    const bool update = strcmp(RACACIT_GAME_PROFILE_ID, "BCUS98124-1.20") == 0;
+#else
+    const bool update = false;
+#endif
+    if (!prepare_only && !linux_configure_game_storage(update)) return 2;
+#endif
 
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")

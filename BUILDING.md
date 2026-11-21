@@ -229,12 +229,21 @@ The launcher selects 1.20 when the USA disc, matching update files, and update b
 
 On Linux the game runs directly from its build. Build both versions through `scripts/pipeline.sh`
 with their respective EBOOTs and the same pinned, patched runtime. Provide SDL2, zlib, Vulkan
-headers and loader, and glslang from your distribution. For 1.00, point `PS3_VFS_ROOT` at the
-folder containing the disc's `PS3_GAME`, and set `PS3_HDD0_ROOT` to its writable installed-data
-folder. For 1.20, use the same disc root and a separate writable installed-data folder containing
-`game/BCUS98124/PARAM.SFO` and `game/BCUS98124/USRDIR` from your installed update. Set
-`PS3_UPDATE_PARAM_SFO` to that installed metadata file and `PS3_HDD0_HOME_ROOT` to the 1.00
-HDD folder's `home` directory to share saves. Pass the respective decrypted EBOOT to each binary.
+headers and loader, and glslang from your distribution. For 1.00, pass the disc executable at
+`PS3_GAME/USRDIR/EBOOT.elf`. The game finds the disc root from that path. Set `PS3_VFS_ROOT`
+when passing a copy of the executable from another folder.
+
+The default game data directory is `$XDG_DATA_HOME/racit` (`~/.local/share/racit` if unset).
+The disc build uses its `dev_hdd0` folder. If that folder has yet to be created and the current
+directory already contains `gamedata/dev_hdd0`, the disc build keeps using that older folder.
+For 1.20, put the installed update's `PARAM.SFO` and `USRDIR` in
+`dev_hdd0_u120/game/BCUS98124` under the game data directory. Set `PS3_VFS_ROOT` to the
+original disc root and pass the decrypted update EBOOT to the 1.20 executable. The game reads
+the update metadata from that folder and shares saves with the disc build by default.
+
+`PS3_HDD0_ROOT` and `PS3_UPDATE_PARAM_SFO` still select custom locations. When you set
+`PS3_HDD0_ROOT` yourself for 1.20, set `PS3_HDD0_HOME_ROOT` to the disc HDD's `home` folder
+to share saves, or leave it unset to keep using the custom HDD's own saves.
 
 Both Linux versions load and save in-game settings in `$XDG_CONFIG_HOME/racit/settings.txt`
 (`~/.config/racit/settings.txt` by default). Set `RACACIT_SETTINGS_FILE` to use a different
