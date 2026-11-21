@@ -31,7 +31,7 @@ jobs:
       - name: Install the native Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libvulkan-dev glslang-dev spirv-tools zlib1g-dev ninja-build
+          sudo apt-get install -y libsdl2-dev libvulkan-dev glslang-dev glslang-tools spirv-tools zlib1g-dev ninja-build
       - name: Check data-free behavior on Linux
         run: python -m unittest discover -s tests -v
       - name: Compile the patched Linux runtime
