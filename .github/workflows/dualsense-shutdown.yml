@@ -1,0 +1,46 @@
+name: DualSense audio shutdown
+on:
+  push:
+    branches: ['ci/run/racit-dualsense-shutdown-20261121']
+permissions:
+  contents: read
+jobs:
+  shutdown:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Exercise the patched audio lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=$PWD
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply --ignore-whitespace --include=libs/audio/cellAudio.c \
+            --include=libs/audio/ds_player.c --include=libs/audio/ds_player.h \
+            ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          run=$(mktemp -d "$RUNNER_TEMP/audio-shutdown.XXXXXXXX")
+          audio="$root/tools/ps3recomp/libs/audio"
+          cd "$run"
+          extract() {
+            awk -v start="$1" -v stop="$2" '$0 ~ stop && emit { ok=1; exit }
+              $0 ~ start { emit=1 } emit { print } END { if (!ok) exit 1 }' "$audio/cellAudio.c"
+          }
+          extract '^static atomic_int +s_mix_thread_running' '^static mutex_t +s_audio_mutex' > mixer_state.inc
+          extract '^static SDL_AudioDeviceID s_sdl_audio_dev' '^/\* One biquad' > device_state.inc
+          extract '^static int audio_backend_init' '^static void audio_backend_submit' >> device_state.inc
+          extract '^static int audio_start_mix_thread' '^/\* ---' > mixer_lifecycle.inc
+          flags=(-pthread -lm)
+          if [[ "$RUNNER_OS" == Windows ]]; then flags=(--target=x86_64-pc-windows-msvc); fi
+          clang -std=c17 -I. -I"$audio" "$root/tests/dualsense_shutdown_fixture.c" "$audio/ds_player.c" "${flags[@]}" -o check.exe
+          RACACIT_DS_RAW=dual.raw RACACIT_DS_DEVICE=1 ./check.exe
