@@ -64,7 +64,7 @@ CODE_NOISE_START = re.compile(r'''/\*|//|["']''')
 
 
 def code_only(text):
-    """Text with comments and string and character literals blanked out, preserving newlines."""
+    """Mask comments and quoted literals in lifted C++."""
     out, i, n = [], 0, len(text)
     while i < n:
         token = CODE_NOISE_START.search(text, i)
@@ -89,7 +89,7 @@ def code_only(text):
             j = i + 1
             while j < n and text[j] != delimiter and text[j] != '\n':
                 j += 2 if text[j] == '\\' and j + 1 < n else 1
-            out.append(delimiter + ' ' * (j - i - 1) + (delimiter if j < n and text[j] == delimiter else ''))
+            out.append(delimiter + ' ' * (j - i - 1) + (delimiter if j < n else ''))
             i = j + 1
     return ''.join(out)
 
