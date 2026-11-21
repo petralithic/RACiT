@@ -1,0 +1,58 @@
+name: Mouse wheel input pulse
+on:
+  push:
+    branches: ['ci/run/racit-wheel-pulse-20261121']
+permissions:
+  contents: read
+jobs:
+  input:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 6
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Verify wheel actions survive an intervening input poll
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=$PWD
+          run=$(mktemp -d "$RUNNER_TEMP/wheel-pulse.XXXXXXXX")
+          patch=patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          file=libs/input/cellPad.c
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git show "b80f341:$patch" > "$run/baseline.patch"
+          runtime="$root/tools/ps3recomp"
+          flags=(-std=c17 -Wall -Wextra -Werror -I. -I"$runtime/include" -I"$runtime/libs/input")
+          cd "$run"
+          for variant in baseline candidate; do
+            selected_patch="$root/$patch"
+            extra=(-UBASELINE)
+            if [[ "$variant" == baseline ]]; then selected_patch="$run/baseline.patch"; extra=(-DBASELINE); fi
+            git -C "$runtime" apply --ignore-whitespace --include="$file" "$selected_patch"
+            awk '/^enum [{] KB_CROSS/ { on=1 }
+                 on && /^static int kb_parse_one/ { done=1; exit }
+                 on { print } END { if (!done) exit 1 }' "$runtime/$file" > wheel_bindings.inc
+            awk '/^static void pad_poll_kbm\(/ { on=1 }
+                 on { print }
+                 on && $0 == "}" { done=1; exit }
+                 END { if (!done) exit 1 }' "$runtime/$file" > wheel_poll.inc
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              clang "${flags[@]}" "${extra[@]}" --target=x86_64-pc-windows-msvc "$root/tests/wheel_pulse_fixture.c" -o check.exe
+            else
+              clang "${flags[@]}" "${extra[@]}" "$root/tests/wheel_pulse_fixture.c" -o check.exe -lm
+            fi
+            ./check.exe
+            if [[ "$variant" == baseline ]]; then
+              git -C "$runtime" apply -R --ignore-whitespace --include="$file" "$run/baseline.patch"
+            fi
+          done
