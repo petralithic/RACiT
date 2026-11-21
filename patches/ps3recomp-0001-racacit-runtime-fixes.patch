@@ -20133,10 +20133,10 @@ index 0000000..809a855
 +    }
 +}
 diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
-index f9725b8..70d595a 100644
+index f9725b84..f078b8cc 100644
 --- a/libs/video/rsx_shader_spirv.cpp
 +++ b/libs/video/rsx_shader_spirv.cpp
-@@ -19,14 +19,24 @@
+@@ -19,14 +19,28 @@
  
  #include <stdio.h>
  #include <string.h>
@@ -20158,11 +20158,15 @@ index f9725b8..70d595a 100644
 +#include <mutex>
 +#include <unordered_map>
  #include <vector>
-+#include <stdlib.h>
++#ifdef _WIN32
++#include <windows.h>
++#else
++#include <unistd.h>
++#endif
  
  namespace {
  
-@@ -51,7 +61,7 @@ bool glslang_ready()
+@@ -51,7 +65,7 @@ bool glslang_ready()
  
  extern "C" int rsx_hlsl_to_spirv_available(void) { return 1; }
  
@@ -20171,7 +20175,7 @@ index f9725b8..70d595a 100644
                                   u32* words, u32 max_words, u32* out_words,
                                   char* log, u32 log_size)
  {
-@@ -89,6 +99,17 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+@@ -89,6 +103,17 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
  
      if (!shader.parse(GetDefaultResources(), 100, false, msgs)) {
          put_log(log, log_size, "HLSL parse", shader.getInfoLog());
@@ -20189,7 +20193,7 @@ index f9725b8..70d595a 100644
          return -1;
      }
      glslang::TProgram program;
-@@ -122,9 +143,232 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+@@ -122,9 +147,278 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
      return 0;
  }
  
@@ -20220,12 +20224,16 @@ index f9725b8..70d595a 100644
 +
 +struct Key { u64 a, b; bool operator==(const Key& o) const { return a == o.a && b == o.b; } };
 +struct KeyHash { size_t operator()(const Key& k) const { return (size_t)(k.a ^ (k.b >> 7)); } };
++struct RecordHeader { Key key; u32 words, check; };
++static_assert(sizeof(RecordHeader) == 24, "SPIR-V cache record layout");
++constexpr u32 kWordCheck = 0x5350565Au;
 +
-+struct Rec { long long off; u32 n; };   /* words at file offset off (+24 header) */
++struct Rec { long long off; u32 n; };   /* record header offset */
 +std::mutex s_mu;
-+std::unordered_map<Key, std::vector<u32>, KeyHash> s_cache;   /* no file: words in memory */
++std::unordered_map<Key, std::vector<u32>, KeyHash> s_cache;   /* words that weren't saved to disk */
 +std::unordered_map<Key, Rec, KeyHash> s_index;                /* file: where they are */
-+FILE* s_file;                 /* "a+b": appends at the end, reads anywhere */
++FILE* s_file;
++bool s_append;                /* a cache whose repair failed is still readable */
 +bool s_loaded;
 +unsigned long s_hits, s_misses;
 +
@@ -20251,12 +20259,62 @@ index f9725b8..70d595a 100644
 +    return k;
 +}
 +
-+void put_record(FILE* f, const Key& k, const u32* w, u32 n)
++bool cache_seek(FILE* f, long long offset, int origin)
 +{
-+    const u32 check = n ^ 0x5350565Au;
-+    fwrite(&k.a, 8, 1, f); fwrite(&k.b, 8, 1, f);
-+    fwrite(&n, 4, 1, f); fwrite(&check, 4, 1, f);
-+    fwrite(w, 4, n, f);
++#ifdef _WIN32
++    return _fseeki64(f, offset, origin) == 0;
++#else
++    return fseeko(f, offset, origin) == 0;
++#endif
++}
++
++long long cache_tell(FILE* f)
++{
++#ifdef _WIN32
++    return _ftelli64(f);
++#else
++    return ftello(f);
++#endif
++}
++
++bool put_record(FILE* f, const Key& k, const u32* w, u32 n)
++{
++    const RecordHeader header{k, n, n ^ kWordCheck};
++    return fwrite(&header, sizeof header, 1, f) == 1 && fwrite(w, 4, n, f) == n;
++}
++
++bool rewrite_cache(const char* path, const std::vector<std::pair<Key, Rec>>& recs, size_t first)
++{
++    FILE* in = fopen(path, "rb");
++    if (!in) return false;
++#ifdef _WIN32
++    const auto pid = GetCurrentProcessId();
++#else
++    const auto pid = getpid();
++#endif
++    const std::string tmp = std::string(path) + ".rewrite-" + std::to_string(pid);
++    FILE* out = fopen(tmp.c_str(), "wb");
++    if (!out) { fclose(in); return false; }
++    bool ok = fwrite(kMagic, 1, sizeof kMagic, out) == sizeof kMagic;
++    std::vector<u32> words;
++    for (size_t i = first; ok && i < recs.size(); i++) {
++        const Rec& rec = recs[i].second;
++        words.resize(rec.n);
++        ok = cache_seek(in, rec.off + sizeof(RecordHeader), SEEK_SET) &&
++             fread(words.data(), 4, rec.n, in) == rec.n &&
++             put_record(out, recs[i].first, words.data(), rec.n);
++    }
++    ok = fclose(out) == 0 && ok;
++    fclose(in);
++    if (ok) {
++#ifdef _WIN32
++        ok = MoveFileExA(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING) != 0;
++#else
++        ok = rename(tmp.c_str(), path) == 0;
++#endif
++    }
++    if (!ok) remove(tmp.c_str());
++    return ok;
 +}
 +
 +void cache_load()
@@ -20266,85 +20324,79 @@ index f9725b8..70d595a 100644
 +    if (!path || !*path) return;
 +    const char* mb = getenv("RSX_SHADER_CACHE_MB");
 +    const long long cap = (long long)(mb && atoi(mb) > 0 ? atoi(mb) : 192) << 20;
-+    /* Pass 1: index the valid records (a torn tail ends the file). */
-+    bool torn = false, fresh = true;
-+    long long end = 8;
++    bool torn = false, fresh = true, read_only = false;
++    long long end = sizeof kMagic;
 +    std::vector<std::pair<Key, Rec>> recs;
 +    if (FILE* f = fopen(path, "rb")) {
-+        char m[8];
-+        if (fread(m, 1, 8, f) == 8 && !memcmp(m, kMagic, 8)) {
++        const long long size = cache_seek(f, 0, SEEK_END) ? cache_tell(f) : -1;
++        char magic[sizeof kMagic];
++        if (size < 0 || !cache_seek(f, 0, SEEK_SET)) read_only = true;
++        else if (fread(magic, 1, sizeof magic, f) == sizeof magic && !memcmp(magic, kMagic, sizeof magic)) {
 +            fresh = false;
-+            for (;;) {
-+                Key k; u32 n, check;
-+                size_t got = fread(&k.a, 8, 1, f) + fread(&k.b, 8, 1, f) +
-+                             fread(&n, 4, 1, f) + fread(&check, 4, 1, f);
-+                if (got == 0 && feof(f)) break;
-+                if (got != 4 || check != (n ^ 0x5350565Au) || n == 0 || n > (64u << 20) / 4u) { torn = true; break; }
-+                if (fseek(f, (long)n * 4L, SEEK_CUR) != 0) { torn = true; break; }
-+                recs.push_back({ k, Rec{ end, n } });
-+                end += 24 + (long long)n * 4;
++            while (end < size) {
++                RecordHeader header;
++                const long long remaining = size - end - (long long)sizeof header;
++                if (remaining < 0) { torn = true; break; }
++                if (fread(&header, sizeof header, 1, f) != 1) { read_only = true; break; }
++                const long long bytes = (long long)header.words * 4;
++                /* A successful seek past EOF does not mean the words exist. */
++                if (header.check != (header.words ^ kWordCheck) || bytes == 0 ||
++                    bytes > (64LL << 20) || bytes > remaining) { torn = true; break; }
++                recs.push_back({header.key, Rec{end, header.words}});
++                end += sizeof header + bytes;
++                if (!cache_seek(f, bytes, SEEK_CUR)) { read_only = true; break; }
 +            }
-+            if (!torn && ftell(f) != (long)end) torn = true;
-+        }
++        } else if (ferror(f)) read_only = true;
 +        fclose(f);
-+    }
++    } else if (errno != ENOENT) read_only = true;
 +    const bool over = end > cap;
-+    if (!fresh && (torn || over)) {
++    if (!read_only && !fresh && (torn || over)) {
 +        /* Rewrite: the valid records, or only the newest ones (the file is in
 +         * append order) up to half the cap, through a temporary file. */
 +        size_t first = 0;
 +        if (over) {
 +            long long keep = 0;
 +            first = recs.size();
-+            while (first > 0 && keep + 24 + (long long)recs[first - 1].second.n * 4 <= cap / 2) {
-+                keep += 24 + (long long)recs[first - 1].second.n * 4; first--;
++            while (first > 0) {
++                const long long bytes = sizeof(RecordHeader) + (long long)recs[first - 1].second.n * 4;
++                if (keep + bytes > cap / 2) break;
++                keep += bytes;
++                first--;
 +            }
 +        }
-+        std::string tmp = std::string(path) + ".tmp";
-+        FILE* in = fopen(path, "rb");
-+        FILE* out = in ? fopen(tmp.c_str(), "wb") : nullptr;
-+        bool ok = out != nullptr;
-+        if (ok) {
-+            fwrite(kMagic, 1, 8, out);
-+            std::vector<u32> w;
-+            for (size_t i = first; ok && i < recs.size(); i++) {
-+                w.resize(recs[i].second.n);
-+                ok = fseek(in, (long)(recs[i].second.off + 24), SEEK_SET) == 0 &&
-+                     fread(w.data(), 4, w.size(), in) == w.size();
-+                if (ok) put_record(out, recs[i].first, w.data(), (u32)w.size());
-+            }
-+            ok = fclose(out) == 0 && ok;
-+        }
-+        if (in) fclose(in);
-+        if (ok && (remove(path) == 0 || errno == ENOENT) && rename(tmp.c_str(), path) == 0) {
++        if (rewrite_cache(path, recs, first)) {
 +            fprintf(stderr, "[spirv-cache] %s: rewrote %s, kept %zu of %zu programs%c", path,
 +                    torn ? "(torn tail)" : "(over the cap)", recs.size() - first, recs.size(), 10);
-+            recs.erase(recs.begin(), recs.begin() + (long)first);
-+            long long off = 8;
-+            for (auto& r : recs) { r.second.off = off; off += 24 + (long long)r.second.n * 4; }
++            recs.erase(recs.begin(), recs.begin() + first);
++            long long off = sizeof kMagic;
++            for (auto& r : recs) { r.second.off = off; off += sizeof(RecordHeader) + (long long)r.second.n * 4; }
 +        } else {
-+            remove(tmp.c_str());
-+            recs.clear(); fresh = true;   /* could not rewrite: start a new file */
++            read_only = true;
++            fprintf(stderr, "[spirv-cache] %s: rewrite failed, keeping the existing cache\n", path);
 +        }
 +    }
-+    if (fresh) {
-+        s_file = fopen(path, "w+b");
-+        if (s_file) { fwrite(kMagic, 1, 8, s_file); fflush(s_file); }
-+        recs.clear();
-+    } else {
-+        s_file = fopen(path, "a+b");
++    if (!read_only) {
++        s_file = fopen(path, fresh ? "w+b" : "a+b");
++        if (s_file && fresh && (fwrite(kMagic, 1, sizeof kMagic, s_file) != sizeof kMagic || fflush(s_file) != 0)) {
++            fclose(s_file);
++            s_file = nullptr;
++        }
++        s_append = s_file != nullptr;
 +    }
-+    if (s_file) for (const auto& r : recs) s_index.emplace(r.first, r.second);
++    if (!s_file && !fresh) s_file = fopen(path, "rb");
++    if (s_file) {
++        s_index.reserve(recs.size());
++        for (const auto& r : recs) s_index.emplace(r.first, r.second);
++    }
 +    fprintf(stderr, "[spirv-cache] %s: %zu programs indexed%s%c", path, s_index.size(),
-+            s_file ? "" : " (cannot open: in-memory only)", 10);
++            s_append ? "" : s_file ? " (read-only)" : " (in-memory only)", 10);
 +}
 +
 +/* The words of an indexed program; false when the file read fails. */
 +bool cache_read(const Rec& r, u32* words)
 +{
 +    if (!s_file) return false;
-+    fflush(s_file);   /* switching from appending to reading */
-+    if (fseek(s_file, (long)(r.off + 24), SEEK_SET) != 0) return false;
++    if (!cache_seek(s_file, r.off + sizeof(RecordHeader), SEEK_SET)) return false;
 +    return fread(words, 4, r.n, s_file) == r.n;
 +}
 +
@@ -20395,17 +20447,15 @@ index f9725b8..70d595a 100644
 +    if (r == 0 && *out_words) {
 +        std::lock_guard<std::mutex> g(s_mu);
 +        s_misses++;
-+        if (s_file) {
-+            if (s_index.find(k) == s_index.end()) {
-+                fflush(s_file);
-+                fseek(s_file, 0, SEEK_END);           /* "a+" appends anyway; this gives the offset */
-+                const long long off = (long long)ftell(s_file);
-+                put_record(s_file, k, words, *out_words); fflush(s_file);
-+                if (off >= 8) s_index.emplace(k, Rec{ off, *out_words });
++        if (s_append && s_index.find(k) == s_index.end()) {
++            const long long off = cache_seek(s_file, 0, SEEK_END) ? cache_tell(s_file) : -1;
++            if (off >= (long long)sizeof kMagic && put_record(s_file, k, words, *out_words) && fflush(s_file) == 0) {
++                s_index.emplace(k, Rec{off, *out_words});
++                return r;
 +            }
-+        } else {
-+            s_cache.emplace(k, std::vector<u32>(words, words + *out_words));
++            s_append = false;   /* the tail may now be incomplete */
 +        }
++        s_cache.emplace(k, std::vector<u32>(words, words + *out_words));
 +    }
 +    return r;
 +}
