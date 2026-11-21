@@ -1,0 +1,70 @@
+name: Desktop launcher disc path resolution
+on:
+  push:
+    branches: ['ci/run/racit-launcher-relative-disc-20261121']
+permissions:
+  contents: read
+env:
+  SDL2_VERSION: 2.32.10
+jobs:
+  msvc:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756   # v1.13.0
+      - name: SDL2 (VC development package)
+        shell: pwsh
+        run: |
+          $v = $env:SDL2_VERSION
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$v/SDL2-devel-$v-VC.zip" -OutFile sdl.zip
+          Expand-Archive sdl.zip -DestinationPath sdl
+          New-Item -ItemType Directory -Force sdlinc | Out-Null
+          Copy-Item -Recurse "sdl/SDL2-$v/include" sdlinc/SDL2
+      - name: Launcher (cl)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force launcher/build | Out-Null
+          python -I launcher/make_icon.py launcher/build/icon.ico
+          rc /nologo /fo launcher/build/launcher.res launcher/src/launcher.rc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $v = $env:SDL2_VERSION
+          cl /nologo /std:c++17 /O2 /EHsc /utf-8 /W3 /DUNICODE /D_UNICODE /DSDL_MAIN_HANDLED /Isdlinc `
+            launcher/src/app.cpp launcher/src/gfx.cpp launcher/src/iso.cpp launcher/src/store.cpp launcher/src/util.cpp `
+            launcher/build/launcher.res /Fo"launcher/build/" /Fe"launcher/build/RaCACiT Launcher.exe" `
+            /link /SUBSYSTEM:WINDOWS /LIBPATH:"sdl/SDL2-$v/lib/x64" SDL2.lib d2d1.lib dwrite.lib windowscodecs.lib `
+            ole32.lib oleaut32.lib uuid.lib shell32.lib shlwapi.lib winhttp.lib bcrypt.lib setupapi.lib imm32.lib `
+            version.lib winmm.lib gdi32.lib user32.lib advapi32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item "sdl/SDL2-$v/lib/x64/SDL2.dll" launcher/build/
+      - name: Check the disc paths and settings delivered by Play
+        shell: pwsh
+        run: |
+          rustc --edition=2024 .github/tests/launcher_wheel.rs -o launcher-wheel-check.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./launcher-wheel-check.exe 'launcher/build/RaCACiT Launcher.exe'
+          exit $LASTEXITCODE
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install dependencies on the hosted runner
+        run: brew install sdl2 sdl3
+      - name: Build and self-test the desktop launcher
+        shell: bash
+        run: bash mac/build_launcher.sh
+      - name: Check the disc paths and settings delivered by Play
+        shell: bash
+        run: |
+          rustc --edition=2024 .github/tests/launcher_wheel.rs -o launcher-wheel-check
+          ./launcher-wheel-check 'launcher/build/RaCACiT Launcher.app/Contents/MacOS/RaCACiT Launcher'
