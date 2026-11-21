@@ -17447,10 +17447,10 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..ac99b329
+index 00000000..38974897
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2404 @@
+@@ -0,0 +1,2416 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
@@ -18370,6 +18370,7 @@ index 00000000..ac99b329
 +static int s_mdx, s_mdy, s_mwheel;  /* since the last take, under the lock */
 +static float s_weapon_scroll;
 +static Uint64 s_scroll_at, s_smooth_until;
++static int s_scroll_smooth;
 +static unsigned s_mbtn, s_mbtn_tap; /* buttons held / pressed since the last take */
 +static int s_mtest;                 /* the test hook moved the mouse: captured from then on, as a
 +                                     * real capture stays on between moves */
@@ -18396,6 +18397,14 @@ index 00000000..ac99b329
 +    if (!captured) update_cursor();
 +}
 +
++/* Expire unconsumed switches and old gestures. Keep partial physical wheel
++ * steps so slower sensitivity settings still work with widely spaced clicks. */
++static void expire_weapon_scroll(Uint64 now)
++{
++    if (now - s_scroll_at < 250) return;
++    s_weapon_scroll = s_scroll_smooth ? 0.0f : s_weapon_scroll - truncf(s_weapon_scroll);
++}
++
 +static void captured_mouse_wheel(const SDL_MouseWheelEvent* event, int scripted)
 +{
 +    /* WheelUp/Down bindings follow the device. Menus below follow system scrolling. */
@@ -18416,12 +18425,14 @@ index 00000000..ac99b329
 +            s_smooth_until = now + 180;
 +        const int smooth = now < s_smooth_until;
 +        if (y != 0 && (!smooth || s_opt.weapon_scroll == 2)) {
-+            if (now - s_scroll_at >= 250) s_weapon_scroll = 0;
++            expire_weapon_scroll(now);
++            if (smooth != s_scroll_smooth) s_weapon_scroll = truncf(s_weapon_scroll);
 +            const float clockwise = event->direction == SDL_MOUSEWHEEL_FLIPPED ? y : -y;
 +            const float scale = smooth ? 0.25f : 1.0f;
 +            s_weapon_scroll = fminf(32.0f, fmaxf(-32.0f,
 +                s_weapon_scroll + clockwise * scale * (float)s_opt.scroll_sens / 100.0f));
 +            s_scroll_at = now;
++            s_scroll_smooth = smooth;
 +        }
 +    } else {
 +        s_mwheel += wheel;
@@ -18432,11 +18443,12 @@ index 00000000..ac99b329
 +int rsx_host_ui_take_weapon_scroll(void)
 +{
 +    if (!s_weapon_scroll_supported) return 0;
-+    const Uint64 now = SDL_GetTicks64();
 +    LOCK();
 +    const int captured = s_mcap || (s_mtest && !s_win);
-+    if (!captured || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active ||
-+        now - s_scroll_at >= 250) s_weapon_scroll = 0;
++    if (!captured || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active)
++        s_weapon_scroll = 0;
++    else
++        expire_weapon_scroll(SDL_GetTicks64());
 +    const int steps = (int)s_weapon_scroll;
 +    s_weapon_scroll -= (float)steps;
 +    UNLOCK();
