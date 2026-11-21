@@ -35,7 +35,7 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then flags+=(--target=x86_64-pc-windows-msvc); fi
           runtime="$root/tools/ps3recomp"
           extract() {
-            awk -v sig="$1" 'index($0,sig)==1 { print; on=1; next }
+            awk -v sig="$1" 'index($0,sig)==1 && $0 !~ /;[[:space:]]*$/ { print; on=1; next }
                 on { print; if ($0=="}") { done=1; exit } }
                 END { if (!done) exit 1 }' "$runtime/$file"
           }
