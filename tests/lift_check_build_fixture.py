@@ -60,7 +60,7 @@ def main():
                     )
                     configured = run([
                         "cmake", "-S", str(game), "-B", str(build), "-G", generator,
-                        f"-DRECOMP_DIR={lift}", f"-DLIFT_PROFILE={profile}",
+                        f"-DRECOMP_DIR={lift.as_posix()}", f"-DLIFT_PROFILE={profile}",
                     ])
                     built = run(["cmake", "--build", str(build)])
                     assert configured.count(output_line) == 1, configured
