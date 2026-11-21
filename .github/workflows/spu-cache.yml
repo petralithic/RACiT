@@ -25,6 +25,7 @@ jobs:
         shell: bash
         env:
           SCCACHE_GHA_ENABLED: 'false'
+          SCCACHE_DIRECT: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
           SCCACHE_CACHE_SIZE: 128M
         run: |
