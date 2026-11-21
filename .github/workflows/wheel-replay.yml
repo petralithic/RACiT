@@ -1,26 +1,43 @@
-name: Quick Select scroll device isolation
+name: Quick Select scroll on macOS and Windows
 on:
   push:
-    branches: ['ci/run/racit-wheel-devices-20261121']
+    branches: ['ci/run/racit-wheel-desktop-20261121']
 permissions:
   contents: read
 jobs:
-  linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  scroll:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: libsdl-org/SDL
+          ref: 5d249570393f7a37e037abf22cd6012a4cc56a71
+          path: tools/wheel-sdl
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
       - name: Prepare the pinned runtime and SDL2
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libvulkan-dev
+          set -euo pipefail
           git init -q tools/ps3recomp
           git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
-          git -C tools/ps3recomp checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
           git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          cmake -S tools/wheel-sdl -B build/wheel-sdl -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
+          cmake --build build/wheel-sdl --parallel 2
+          cmake --install build/wheel-sdl --prefix "$PWD/build/wheel-native"
       - name: Replay real host wheel input with a mock guest and inventory
+        shell: bash
         run: |
           python3 -B - <<'PYTEST'
           from pathlib import Path
@@ -74,6 +91,14 @@ jobs:
               vm_write32(player + 0x598, ctx->gpr[4]);
           }
           ''' + source[a:b] + r'''
+          static void set_option(const char* key, const char* value)
+          {
+          #ifdef _WIN32
+              assert(_putenv_s(key, value) == 0);
+          #else
+              assert(setenv(key, value, 1) == 0);
+          #endif
+          }
           static void feed(const char* line)
           {
               FILE* f = std::fopen("wheel-script.txt", "wb");
@@ -91,11 +116,11 @@ jobs:
           {
               assert(argc == 2);
               const std::string mode = argv[1];
-              setenv("PAD_IGNORE_REAL", "1", 1);
-              setenv("RACACIT_UI_FILE", "wheel-script.txt", 1);
-              if (mode == "slow") setenv("RACACIT_SCROLL_SENS", "50", 1);
-              if (mode == "off") setenv("RACACIT_WEAPON_SCROLL", "0", 1);
-              if (mode == "touchpad") setenv("RACACIT_WEAPON_SCROLL", "2", 1);
+              set_option("PAD_IGNORE_REAL", "1");
+              set_option("RACACIT_UI_FILE", "wheel-script.txt");
+              if (mode == "slow") set_option("RACACIT_SCROLL_SENS", "50");
+              if (mode == "off") set_option("RACACIT_WEAPON_SCROLL", "0");
+              if (mode == "touchpad") set_option("RACACIT_WEAPON_SCROLL", "2");
               rsx_host_ui_enable_weapon_scroll();
               rsx_host_ui_load_options();
 
@@ -186,7 +211,7 @@ jobs:
                   expect_equipped(6);
 
                   mem[hud + 0x3858 + 0x8B77] = 0;
-                  unsetenv("PAD_IGNORE_REAL");
+                  set_option("PAD_IGNORE_REAL", "");
                   equip("wheel -1", 6);
               }
               std::printf("Offscreen scroll replay passed for %s\n", argv[1]);
@@ -201,6 +226,17 @@ jobs:
               captured_mouse_wheel(&event, 1);
           }
           EOF
-          cc -std=gnu17 -DSDL_GetTicks64=racit_fixture_ticks -c wheel-ui.c -o wheel-ui.o
-          c++ -std=c++17 -Itools/ps3recomp/libs/video wheel-check.cpp wheel-ui.o -lSDL2 -lm -o wheel-check
-          for mode in default slow off touchpad; do ./wheel-check "$mode"; done
+          sdl="$PWD/build/wheel-native"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            clang --target=x86_64-pc-windows-msvc -std=gnu17 -I"$sdl/include" \
+              -DSDL_GetTicks64=racit_fixture_ticks -c wheel-ui.c -o wheel-ui.obj
+            MSYS2_ARG_CONV_EXCL='*' cl.exe /nologo /std:c++17 /EHsc \
+              /Itools/ps3recomp/libs/video /Fewheel-check.exe wheel-check.cpp wheel-ui.obj \
+              build/wheel-native/lib/SDL2.lib gdi32.lib
+            cp "$sdl/bin/SDL2.dll" .
+          else
+            cc -std=gnu17 -I"$sdl/include" -DSDL_GetTicks64=racit_fixture_ticks -c wheel-ui.c -o wheel-ui.o
+            c++ -std=c++17 -Itools/ps3recomp/libs/video wheel-check.cpp wheel-ui.o \
+              -L"$sdl/lib" -lSDL2 -Wl,-rpath,"$sdl/lib" -o wheel-check.exe
+          fi
+          for mode in default slow off touchpad; do ./wheel-check.exe "$mode"; done
