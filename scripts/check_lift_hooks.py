@@ -60,26 +60,37 @@ def check_identity(sources, profile, functions):
              % (os.path.dirname(sources[0]), profile, ', '.join(sorted(w[5:w.index('(')] for w in wanted))))
 
 
+CODE_NOISE_START = re.compile(r'''/\*|//|["']''')
+
+
 def code_only(text):
-    """text with its comments and string and character literals blanked out (newlines kept)."""
+    """Text with comments and string and character literals blanked out, preserving newlines."""
     out, i, n = [], 0, len(text)
     while i < n:
-        c = text[i]
-        if text.startswith('/*', i):
+        token = CODE_NOISE_START.search(text, i)
+        if token is None:
+            out.append(text[i:])
+            break
+        start = token.start()
+        out.append(text[i:start])
+        i = start
+        delimiter = token.group()
+        if delimiter == '/*':
             j = text.find('*/', i + 2)
             j = n if j < 0 else j + 2
-            out.append(''.join(ch if ch == '\n' else ' ' for ch in text[i:j])); i = j
-        elif text.startswith('//', i):
-            j = text.find('\n', i)
+            out.append(''.join(ch if ch == '\n' else ' ' for ch in text[i:j]))
+            i = j
+        elif delimiter == '//':
+            j = text.find('\n', i + 2)
             j = n if j < 0 else j
-            out.append(' ' * (j - i)); i = j
-        elif c in '"\'':
-            j = i + 1
-            while j < n and text[j] != c and text[j] != '\n':
-                j += 2 if text[j] == '\\' else 1
-            out.append(c + ' ' * (min(j, n) - i - 1) + (c if j < n else '')); i = j + 1
+            out.append(' ' * (j - i))
+            i = j
         else:
-            out.append(c); i += 1
+            j = i + 1
+            while j < n and text[j] != delimiter and text[j] != '\n':
+                j += 2 if text[j] == '\\' and j + 1 < n else 1
+            out.append(delimiter + ' ' * (j - i - 1) + (delimiter if j < n and text[j] == delimiter else ''))
+            i = j + 1
     return ''.join(out)
 
 
@@ -143,10 +154,16 @@ def count_calls(sources, hooks):
         return counts
     call = re.compile(r'\b(' + '|'.join(map(re.escape, hooks)) + r')\s*\(')
     before = re.compile(r'([A-Za-z_][A-Za-z0-9_]*|[*&])\s*$')
+    # A source without any possible hook name needs no lexical scan.
+    # Derive the prefixes from this profile's requirements, including any
+    # function that does not follow the shared naming convention.
+    prefixes = {name.partition('_')[0] + '_' if '_' in name else name for name in hooks}
     for path in sources:
         with open(path, encoding='utf-8', errors='replace') as f:
-            code = code_only(f.read())
-        for line in lifted_body_lines(code):
+            raw = f.read()
+        if not any(prefix in raw for prefix in prefixes):
+            continue
+        for line in lifted_body_lines(code_only(raw)):
             for match in call.finditer(line):
                 prior = before.search(line, 0, match.start())
                 if prior and prior.group(1) not in CALL_KEYWORDS:
