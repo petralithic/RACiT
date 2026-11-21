@@ -47,3 +47,5 @@ racit_camera_turn 17
 racit_camera_peek 1
 racit_mouse_now 18
 racit_publish_menu_keyboard 3
+racit_scroll_equip 1
+racit_scroll_quick_select 1

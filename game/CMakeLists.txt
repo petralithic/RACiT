@@ -286,6 +286,10 @@ if(NOT ANDROID)
     set_property(SOURCE "${HOST_DIR}/main.cpp" APPEND PROPERTY COMPILE_DEFINITIONS "RACACIT_BUILD_PROFILE_ID=\"${_racit_profile}\"")
 endif()
 
+if(_racit_profile MATCHES "^BCUS98124-1[.](00|20)$" AND NOT ANDROID)
+    set_property(SOURCE "${HOST_DIR}/main.cpp" APPEND PROPERTY COMPILE_DEFINITIONS RACACIT_WEAPON_SCROLL=1)
+endif()
+
 if(RACACIT_CHECK_HOOKS)
     set(_racit_elf "${RACACIT_ELF}")
     if(NOT _racit_elf AND _racit_profile STREQUAL "BCUS98124-1.00" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../input/EBOOT.ELF")

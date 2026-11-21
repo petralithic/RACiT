@@ -44,6 +44,7 @@ extern "C" void ppu_threads_dump_stacks(ppu_context* main_ctx);
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
+#include "rsx_host_ui.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1790,6 +1791,9 @@ static bool accepts_game_executable(const uint8_t* bytes, size_t size)
 
 int main(int argc, char** argv)
 {
+#ifdef RACACIT_WEAPON_SCROLL
+    rsx_host_ui_enable_weapon_scroll();
+#endif
 #if defined(__linux__) && !defined(__ANDROID__)
     linux_load_settings();
 #endif

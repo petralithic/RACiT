@@ -702,6 +702,91 @@ static void front_end_drain(ppu_context* ctx)
 {
     while (g_trampoline_fn) { void (*tf)(void*) = g_trampoline_fn; g_trampoline_fn = 0; tf(ctx); }
 }
+// The game's Quick Select keeps four pages of eight slots in clockwise order.
+static constexpr int quick_slots_per_page = 8;
+static constexpr int quick_pages_max = 4;
+static constexpr int quick_weapon_limit = 0x17;
+
+static uint32_t quick_select_player(const ppu_context* ctx)
+{
+    // Same TOC lookup as the Quick Select menu constructor in NA 1.00 and 1.20.
+    const auto pool = vm_read32(ctx->gpr[2] - 0x733C);
+    return vm_read32(pool - 0x8000);
+}
+
+static int scrolled_quick_slot(uint32_t player, uint32_t slots, int count,
+                               int cursor, uint32_t equipped, int steps)
+{
+    int weapons[quick_pages_max * quick_slots_per_page];
+    int n = 0, start = -1;
+    for (int slot = 0; slot < count; ++slot) {
+        const auto id = vm_read32(slots + 4 * slot);
+        if (id >= quick_weapon_limit || !vm_read8(player + 0x10 + 0x18 * id + 0x15)) continue;
+        if (slot == cursor || (cursor < 0 && id == equipped && start < 0)) start = n;
+        weapons[n++] = slot;
+    }
+    if (!n) return -1;
+    // With no weapon selected, the first detent lands on an end of the list.
+    if (start < 0) start = steps > 0 ? -1 : 0;
+    const int wrapped = (start + steps) % n;
+    return weapons[(wrapped + n) % n];
+}
+
+extern "C" void racit_scroll_equip(ppu_context* ctx, uint32_t hud, uint32_t hero)
+{
+    // Called on the HUD tick on the fallthrough of its weapon-switch gate.
+    // The guest resolves the hero and checks its equip state before this point.
+    if (!hero || vm_read8(hud + 0x44FD4) || vm_read8(hud + 0x3858 + 0x8B77)) return;
+    const int steps = rsx_host_ui_take_weapon_scroll();
+    if (!steps) return;
+
+    const auto player = quick_select_player(ctx);
+    const auto slots = player + 0x3C0;
+    const auto equipped = vm_read32(player + 0x598);
+    const int slot = scrolled_quick_slot(player, slots, quick_pages_max * quick_slots_per_page,
+                                         -1, equipped, steps);
+    if (slot < 0) return;
+    const auto weapon = vm_read32(slots + 4 * slot);
+    if (weapon == equipped) return;
+
+    // Same equipment method and arguments used by the game's quick switch.
+    const auto equipment = hero + 0x2510;
+    const auto method = vm_read32(vm_read32(equipment) + 0x1C);
+    FrontEndCall saved;
+    front_end_enter(ctx, saved);
+    ctx->gpr[2] = vm_read32(method + 4);
+    ctx->gpr[3] = equipment;
+    ctx->gpr[4] = weapon;
+    ctx->gpr[5] = 0;
+    ctx->ctr = vm_read32(method);
+    ps3_indirect_call(ctx);
+    front_end_drain(ctx);
+    front_end_leave(ctx, saved);
+}
+
+extern "C" int racit_scroll_quick_select(ppu_context* ctx, uint32_t menu)
+{
+    // The game copies enabled rings into a compact menu array. Use those page
+    // numbers while the menu is open so its own selection and close still work.
+    if (vm_read8(menu + 0x8B78)) return -1; // gadget view
+    const auto pages = vm_read32(menu + 0x8804);
+    if (!pages || pages > quick_pages_max) return -1;
+    const int steps = rsx_host_ui_take_weapon_scroll();
+    if (!steps) return -1;
+
+    const auto player = quick_select_player(ctx);
+    const auto slots = menu + 0x8784;
+    const auto page = vm_read32(menu + 0x8B68);
+    const auto cursor = vm_read32(menu + 0x8B60);
+    const int selected = page < pages && cursor < quick_slots_per_page
+        ? static_cast<int>(page * quick_slots_per_page + cursor) : -1;
+    const int slot = scrolled_quick_slot(player, slots, pages * quick_slots_per_page,
+                                         selected, vm_read32(player + 0x598), steps);
+    if (slot < 0) return -1;
+    vm_write32(menu + 0x8B68, slot / quick_slots_per_page);
+    return slot % quick_slots_per_page;
+}
+
 static uint32_t front_end_movie(ppu_context* ctx, uint32_t handle)
 {
     ctx->gpr[3] = handle;                                     /* as func_004C8898: the movie from its handle */

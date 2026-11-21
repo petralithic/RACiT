@@ -282,6 +282,63 @@ def apply_mouse_cameras(recomp, profile_id):
 
 
 
+def apply_weapon_scroll(recomp, profile_id):
+    # The guarded quick-switch path, then the page redraw and selection paths
+    # inside the open menu. The menu supplies its own release-to-equip behavior.
+    sites = {
+        'BCUS98124-1.00': ('001E4BC0', '001E58DC', '0020FA88', '0020FFD4', '00210128', '002102A4'),
+        'BCUS98124-1.20': ('001E4BF8', '001E5914', '0020FAD8', '0021005C', '002101B0', '0021032C'),
+    }.get(profile_id)
+    if not sites:
+        return
+    hud, equip, menu, redraw, highlight, apply = sites
+    hooks = {
+        hud: ('extern "C" void racit_scroll_equip(ppu_context*, uint32_t, uint32_t);\n',
+              [(equip, '        racit_scroll_equip(ctx, (uint32_t)ctx->gpr[31], (uint32_t)ctx->gpr[29]);\n')]),
+        menu: ('extern "C" int racit_scroll_quick_select(ppu_context*, uint32_t);\n',
+               [(redraw, '        scroll_slot = racit_scroll_quick_select(ctx, (uint32_t)ctx->gpr[31]);\n'),
+                (highlight, '        if (scroll_slot >= 0) {\n'
+                            '            const uint32_t menu = (uint32_t)ctx->gpr[31];\n'
+                            '            ctx->gpr[26] = (int32_t)vm_read32(menu + 0x8B60);\n'
+                            '            vm_write32(menu + 0x8B60, scroll_slot);\n'
+                            '            vm_write8(menu + 0x8B7B, 1);\n'
+                            '            vm_write8(menu + 0x8B88, 1);\n'
+                            '            goto loc_%s;\n'
+                            '        }\n' % apply)]),
+    }
+    for path in sorted(glob.glob(os.path.join(recomp, 'ppu_recomp_*.cpp'))):
+        if not hooks:
+            break
+        with open(path, encoding='utf-8', errors='surrogateescape') as f:
+            source = f.read()
+        original = source
+        for func in list(hooks):
+            span = func_span(source, 'func_' + func)
+            if not span:
+                continue
+            decl, edits = hooks.pop(func)
+            _, body, end = span
+            fn = source[body:end]
+            for label, line in edits:
+                marker = 'loc_' + label + ':\n'
+                if fn.count(marker) != 1:
+                    sys.exit('patch_lift: weapon scroll anchor %s missing in %s' % (label, func))
+                if line not in fn:
+                    fn = fn.replace(marker, line + marker if func == hud else marker + line, 1)
+            if func == menu and 'int scroll_slot = -1;' not in fn:
+                fn = '        int scroll_slot = -1;\n' + fn
+            source = source[:body] + fn + source[end:]
+            if decl not in source:
+                pos = source.index('\n', source.index('#include')) + 1
+                source = source[:pos] + decl + source[pos:]
+        if source != original:
+            with open(path, 'w', encoding='utf-8', errors='surrogateescape') as f:
+                f.write(source)
+    if hooks:
+        sys.exit('patch_lift: weapon scroll functions missing for %s (%s)' %
+                 (profile_id, ', '.join(hooks)))
+
+
 def check_mouse_camera_tables():
     """Every known profile (versions/profiles.json) has a place for every mouse camera."""
     with open(os.path.join(ROOT, 'versions', 'profiles.json'), encoding='utf-8') as f:
@@ -1142,6 +1199,7 @@ print(f'{n} file(s) patched')
 # 22. The mouse cameras (MOUSE_CAMERAS above), checked for every profile.
 check_mouse_camera_tables()
 apply_mouse_cameras(RECOMP, profile['id'] if options.elf else BUILD_TITLE + '-1.00')
+apply_weapon_scroll(RECOMP, profile['id'] if options.elf else BUILD_TITLE + '-1.00')
 
 # 13. v42-v62 hooked the SCREAM synth (nextsynth, EBOOT 0xBFD480: the lifts
 #     sub_BFD480_04000 and spu_0001_at_00BED400) to copy the controller's

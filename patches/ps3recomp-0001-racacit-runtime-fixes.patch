@@ -17447,10 +17447,10 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..fd54eb37
+index 00000000..cb80f961
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2320 @@
+@@ -0,0 +1,2382 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
@@ -17542,6 +17542,10 @@ index 00000000..fd54eb37
 +
 +static int env_int(const char* k, int def) { const char* v = getenv(k); return (v && *v) ? atoi(v) : def; }
 +static int env_is(const char* k, const char* s) { const char* v = getenv(k); return v && !SDL_strcasecmp(v, s); }
++static int s_weapon_scroll_supported;
++
++void rsx_host_ui_enable_weapon_scroll(void) { s_weapon_scroll_supported = 1; }
++
 +static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 +
 +void rsx_host_ui_load_options(void)
@@ -17595,6 +17599,8 @@ index 00000000..fd54eb37
 +    o.kbm           = env_int("RACACIT_KBM", 1) ? 1 : 0;
 +    { const char* v = getenv("RACACIT_MOUSE_SENS"); const double m = v && *v ? atof(v) : 1.0;
 +      o.mouse_sens = clampi((int)(m * 100.0 + 0.5), 10, 500); }
++    o.weapon_scroll = clampi(env_int("RACACIT_WEAPON_SCROLL", 1), 0, 2);
++    o.scroll_sens   = clampi(env_int("RACACIT_SCROLL_SENS", 100), 25, 200);
 +    o.mouse_invert  = env_int("RACACIT_MOUSE_INVERT_Y", 0) ? 1 : 0;
 +    o.fov           = clampi(env_int("RACACIT_FOV", 100), 75, 150);
 +    o.cam_dist      = clampi(env_int("RACACIT_CAM_DIST", 100), 50, 200);
@@ -17684,6 +17690,10 @@ index 00000000..fd54eb37
 +    snprintf(kv[k++], 96, "RACACIT_MOUSE_INVERT_Y=%d", o->mouse_invert);
 +    snprintf(kv[k++], 96, "RACACIT_FOV=%d", o->fov);
 +    snprintf(kv[k++], 96, "RACACIT_CAM_DIST=%d", o->cam_dist);
++    if (s_weapon_scroll_supported) {
++        snprintf(kv[k++], 96, "RACACIT_WEAPON_SCROLL=%d", o->weapon_scroll);
++        snprintf(kv[k++], 96, "RACACIT_SCROLL_SENS=%d", o->scroll_sens);
++    }
 +    *n = k;
 +}
 +
@@ -17851,7 +17861,7 @@ index 00000000..fd54eb37
 +enum { R_DISPLAY = 1, R_WINSIZE, R_VSYNC, R_ASPECT, R_UPSCALE, R_SHARP, R_BRIGHT,
 +       R_RES, R_ANISO, R_TRI, R_DSSPK, R_DSVOL, R_DSHAP, R_DSHVOL, R_DSRUMBLE, R_DSTRIG, R_DSSWAP,
 +       R_DSLIGHT, R_DSMOTION, R_FPS, R_DISCORD, R_SKIPCLANK, R_RESUME, R_QUIT,
-+       R_PRESET, R_TEXQ, R_PACE, R_CPU, R_KBM, R_MSENS, R_MINV, R_DSTRIGSTR, R_TROPHIES,
++       R_PRESET, R_TEXQ, R_PACE, R_CPU, R_KBM, R_MSENS, R_MINV, R_WEAPON_SCROLL, R_SCROLL_SENS, R_DSTRIGSTR, R_TROPHIES,
 +       R_FOV, R_CAMDIST, R_SKIPINTRO, R_SKIPSTART,
 +       R_CH_BOLTAMT, R_CH_ADDBOLTS, R_CH_WPN, R_CH_WPNUP, R_CH_WPNMAX, R_CH_WPNRESET, R_CH_GOD,
 +       R_CH_DEST, R_CH_GO };
@@ -17895,6 +17905,8 @@ index 00000000..fd54eb37
 +    { K_OPT, R_KBM,     "Play with keyboard and mouse" },
 +    { K_OPT, R_MSENS,   "Mouse sensitivity" },
 +    { K_OPT, R_MINV,    "Invert mouse Y" },
++    { K_OPT, R_WEAPON_SCROLL, "Scroll to switch weapons" },
++    { K_OPT, R_SCROLL_SENS, "Weapon scroll sensitivity" },
 +    { K_GAP, 0, "" },
 +    { K_ACT, R_RESUME,  "Resume" },
 +    { K_ACT, R_QUIT,    "Quit game" },
@@ -17982,6 +17994,7 @@ index 00000000..fd54eb37
 +        int k = 0;
 +        for (int i = 0; i < ns; i++) {
 +            const int id = src[i].kind == K_OPT ? src[i].id : 0;
++            if (!s_weapon_scroll_supported && (id == R_WEAPON_SCROLL || id == R_SCROLL_SENS)) continue;
 +            if (!plus && (id == R_DSSWAP || id == R_DSTRIG || id == R_DSTRIGSTR || id == R_DSSPK || id == R_DSVOL ||
 +                          id == R_DSHAP || id == R_DSHVOL || id == R_DSLIGHT || id == R_DSMOTION ||
 +                          (src[i].kind == K_HEAD && !strcmp(src[i].label, "DualSense")))) continue;
@@ -18045,7 +18058,8 @@ index 00000000..fd54eb37
 +    if (k_rows[i].id == R_DSVOL) return o->ds_speaker;
 +    if (k_rows[i].id == R_DSHVOL) return o->ds_haptics;
 +    if (k_rows[i].id == R_DSTRIGSTR) return o->ds_triggers;
-+    if (k_rows[i].id == R_MSENS || k_rows[i].id == R_MINV) return o->kbm;
++    if (k_rows[i].id == R_SCROLL_SENS) return o->kbm && o->weapon_scroll;
++    if (k_rows[i].id == R_MSENS || k_rows[i].id == R_MINV || k_rows[i].id == R_WEAPON_SCROLL) return o->kbm;
 +    return 1;
 +}
 +
@@ -18145,6 +18159,8 @@ index 00000000..fd54eb37
 +    case R_CPU:     snprintf(b, n, "%s", o->cpu_mode ? "Maximum (spin on all cores)" : "Efficient"); break;
 +    case R_KBM:     snprintf(b, n, "%s", o->kbm ? "On" : "Off"); break;
 +    case R_MSENS:   snprintf(b, n, "%d%%", o->mouse_sens); break;
++    case R_WEAPON_SCROLL: snprintf(b, n, "%s", o->weapon_scroll == 2 ? "Mouse + touchpad" : o->weapon_scroll ? "Mouse wheel" : "Off"); break;
++    case R_SCROLL_SENS: snprintf(b, n, "%d%%", o->scroll_sens); break;
 +    case R_MINV:    snprintf(b, n, "%s", o->mouse_invert ? "On" : "Off"); break;
 +    case R_FOV:     snprintf(b, n, "%d%%%s", o->fov, o->fov == 100 ? " (as the game has it)" : ""); break;
 +    case R_CAMDIST: snprintf(b, n, "%d%%%s", o->cam_dist, o->cam_dist == 100 ? " (as the game has it)" : ""); break;
@@ -18219,6 +18235,8 @@ index 00000000..fd54eb37
 +    case R_KBM:     o->kbm = !o->kbm; break;
 +    case R_MSENS:   o->mouse_sens = clampi(o->mouse_sens + dir * (o->mouse_sens + dir * 5 > 100 ? 25 : 10), 10, 500); break;
 +    case R_MINV:    o->mouse_invert = !o->mouse_invert; break;
++    case R_WEAPON_SCROLL: o->weapon_scroll = cycle(o->weapon_scroll, 3, dir); break;
++    case R_SCROLL_SENS: o->scroll_sens = clampi(o->scroll_sens + dir * 25, 25, 200); break;
 +    case R_FOV:     o->fov = clampi(o->fov + dir * 5, 75, 150); break;
 +    case R_CAMDIST: o->cam_dist = clampi(o->cam_dist + dir * 10, 50, 200); break;
 +    case R_FPS:    o->fps = !o->fps; break;
@@ -18350,6 +18368,8 @@ index 00000000..fd54eb37
 +/* s_mcap: the cursor is captured (relative mouse mode); s_mcap_resume: it
 + * was when the menu opened, so it is again when the menu closes. */
 +static int s_mdx, s_mdy, s_mwheel;  /* since the last take, under the lock */
++static float s_weapon_scroll;
++static Uint64 s_scroll_at, s_smooth_until;
 +static unsigned s_mbtn, s_mbtn_tap; /* buttons held / pressed since the last take */
 +static int s_mtest;                 /* the test hook moved the mouse: captured from then on, as a
 +                                     * real capture stays on between moves */
@@ -18369,9 +18389,24 @@ index 00000000..fd54eb37
 +    LOCK();
 +    s_mcap = captured;
 +    s_mdx = s_mdy = s_mwheel = 0;
++    s_weapon_scroll = 0;
++    s_smooth_until = 0;
 +    s_mbtn = s_mbtn_tap = 0;
 +    UNLOCK();
 +    if (!captured) update_cursor();
++}
++
++int rsx_host_ui_take_weapon_scroll(void)
++{
++    if (!s_weapon_scroll_supported) return 0;
++    const Uint64 now = SDL_GetTicks64();
++    LOCK();
++    if (!s_mcap || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active ||
++        now - s_scroll_at >= 250) s_weapon_scroll = 0;
++    const int steps = (int)s_weapon_scroll;
++    s_weapon_scroll -= (float)steps;
++    UNLOCK();
++    return steps;
 +}
 +
 +int rsx_host_ui_mouse_take(int* dx, int* dy, int* wheel, unsigned* buttons)
@@ -18586,7 +18621,32 @@ index 00000000..fd54eb37
 +        if (s_mcap) {
 +            /* WheelUp/Down bindings follow the device. Menus below follow system scrolling. */
 +            const int wheel = e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e->wheel.y : e->wheel.y;
-+            LOCK(); s_mwheel += wheel; UNLOCK();
++            LOCK();
++            if (s_weapon_scroll_supported && s_opt.kbm && s_opt.weapon_scroll &&
++                !s_open && !s_sv_active) {
++#if SDL_VERSION_ATLEAST(2, 0, 18)
++                const float y = e->wheel.preciseY;
++#else
++                const float y = e->wheel.y;
++#endif
++                const Uint64 now = SDL_GetTicks64();
++                /* SDL2 backends can put smooth and detented input on the same mouse ID.
++                 * Keep integral samples within a detected smooth gesture in that gesture. */
++                if (e->wheel.which == SDL_TOUCH_MOUSEID || y != truncf(y))
++                    s_smooth_until = now + 180;
++                const int smooth = now < s_smooth_until;
++                if (y != 0 && (!smooth || s_opt.weapon_scroll == 2)) {
++                    if (now - s_scroll_at >= 250) s_weapon_scroll = 0;
++                    const float clockwise = e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? y : -y;
++                    const float scale = smooth ? 0.25f : 1.0f;
++                    s_weapon_scroll = fminf(32.0f, fmaxf(-32.0f,
++                        s_weapon_scroll + clockwise * scale * (float)s_opt.scroll_sens / 100.0f));
++                    s_scroll_at = now;
++                }
++            } else {
++                s_mwheel += wheel;
++            }
++            UNLOCK();
 +            return 0;
 +        }
 +        if (s_open && tr_shown()) { if (e->wheel.y) tr_move(e->wheel.y > 0 ? -3 : 3); return 0; }
@@ -19762,6 +19822,8 @@ index 00000000..fd54eb37
 +{ (void)s; (void)e; (void)n; (void)a; (void)i; (void)d; return RSX_SAVE_PICK_UNAVAILABLE; }
 +int  rsx_host_ui_modal(void) { return 0; }
 +volatile int g_racacit_kbm_on;
++void rsx_host_ui_enable_weapon_scroll(void) {}
++int rsx_host_ui_take_weapon_scroll(void) { return 0; }
 +int  rsx_host_ui_mouse_take(int* dx, int* dy, int* wheel, unsigned* buttons) { *dx = *dy = *wheel = 0; *buttons = 0; return 0; }
 +int  rsx_host_ui_test_key(int key) { (void)key; return 0; }
 +unsigned rsx_host_ui_sheet(unsigned char* out) { (void)out; return 0; }
@@ -19773,10 +19835,10 @@ index 00000000..fd54eb37
 +#endif
 diff --git a/libs/video/rsx_host_ui.h b/libs/video/rsx_host_ui.h
 new file mode 100644
-index 0000000..6a9f536
+index 00000000..c6436a5f
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.h
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,261 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display (RaCACiT)
 + *
@@ -19853,6 +19915,8 @@ index 0000000..6a9f536
 +    int   cpu_mode;       /* 0 efficient (SPU lanes sleep after a short spin), 1 maximum (they spin) */
 +    int   present_pace;   /* 1: presents held to an even 60 Hz (rsx_be_proxy.c) */
 +    int   kbm;            /* 1: keyboard and mouse play (cellPad.c)            */
++    int   weapon_scroll;  /* 0 off, 1 detents, 2 include smooth scrolling */
++    int   scroll_sens;    /* weapon steps per detent, percent */
 +    int   mouse_sens;     /* mouse camera speed, percent (100 = default)       */
 +    int   mouse_invert;   /* 1: mouse up looks down                            */
 +    int   fov;            /* field of view, percent of the game's own (100 = as shipped, 75..150):
@@ -19913,6 +19977,8 @@ index 0000000..6a9f536
 + * call; returns 1 while captured. test_key: 1 when the test hook holds `key`
 + * (a scancode, or 512 + mouse button 1-5) -- or, for -1, any key. */
 +extern volatile int g_racacit_kbm_on;
++void rsx_host_ui_enable_weapon_scroll(void);
++int rsx_host_ui_take_weapon_scroll(void);
 +int rsx_host_ui_mouse_take(int* dx, int* dy, int* wheel, unsigned* buttons);
 +int rsx_host_ui_test_key(int key);
 +
