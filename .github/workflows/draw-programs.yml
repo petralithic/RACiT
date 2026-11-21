@@ -1,0 +1,60 @@
+name: Draw program lookup reuse
+on:
+  push:
+    branches: ['ci/run/racit-draw-programs-20261121']
+permissions:
+  contents: read
+jobs:
+  programs:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Compile and compare the shared draw engine lookup
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=tools/ps3recomp
+          file=libs/video/rsx_draw_engine.c
+          patch=patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          git init -q "$runtime"
+          git -C "$runtime" fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C "$runtime" -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git show "cbc371c:$patch" > baseline.patch
+          flags=(-std=gnu17 -I"$runtime/include" -I"$runtime/libs/video")
+          if [[ "$RUNNER_OS" == Windows ]]; then flags+=(--target=x86_64-pc-windows-msvc); fi
+          extract_draw() {
+            awk '/^static struct .* s_fpc;/ {capture=1}
+                 /^\/\* What a draw runs before/ {if (capture) exit}
+                 capture {print}' "$1" > program-lookup.inc
+            awk '/^static u32 eng_fp_tex_mask\(/ {capture=1}
+                 capture {print}
+                 capture && /^}/ {exit}' "$1" > texture-mask.inc
+            awk '/^static u32 eng_pipeline_get\(/ {capture=1}
+                 capture && /^    const u32 fp_ctrl/ {
+                    print "    return record_pipeline(vp_uc, fp_uc, vp_instrs, fp_size, fixed);\n}"; exit
+                 }
+                 capture {print}' "$1" > pipeline-input.inc
+          }
+          awk '/^void rsx_vertex_layout_plan_init\(/ {capture=1}
+               capture {print}
+               capture && /^}/ {exit}' "$runtime/libs/video/rsx_vertex_compact.c" > layout-constructor.inc
+          git -C "$runtime" apply --ignore-whitespace ../../baseline.patch
+          extract_draw "$runtime/$file"
+          clang "${flags[@]}" -DBASELINE -I. .github/tests/draw-programs.c -o baseline.exe
+          ./baseline.exe
+          git -C "$runtime" apply -R --ignore-whitespace --include="$file" ../../baseline.patch
+          git -C "$runtime" apply --ignore-whitespace --include="$file" "../../$patch"
+          clang "${flags[@]}" -fsyntax-only "$runtime/$file"
+          extract_draw "$runtime/$file"
+          clang "${flags[@]}" -I. .github/tests/draw-programs.c -o candidate.exe
+          ./candidate.exe
