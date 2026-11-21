@@ -1,0 +1,82 @@
+name: Desktop executable profile guard
+on:
+  push:
+    branches: ['ci/run/racit-desktop-elf-profile-20261121']
+permissions:
+  contents: read
+jobs:
+  profile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: runner.os == 'Windows'
+        with:
+          repository: madler/zlib
+          ref: 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
+          path: test-zlib
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Exercise generated profile selection with real CRC checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/elf-profile.XXXXXXXX")
+          mkdir -p "$run/game" "$run/versions"
+          cp versions/profiles.json "$run/versions/"
+          cp tests/elf_profile_fixture.cpp "$run/game/main.cpp"
+          awk '
+            /^static bool accepts_game_executable\(/ { emit=1; count++ }
+            emit { print; if ($0 == "}") emit=0 }
+            END { if (count != 1 || emit) exit 1 }
+          ' game/main.cpp > "$run/game/check_source.inc"
+          {
+            printf '%s\n' 'cmake_minimum_required(VERSION 3.20)' \
+              'project(elf_profile_check LANGUAGES C CXX)' \
+              'set(HOST_DIR "${CMAKE_CURRENT_SOURCE_DIR}")'
+            awk '
+              /^set\(_racit_profile / { emit=1 }
+              /^if\(RACACIT_CHECK_HOOKS\)/ { exit }
+              emit { print }
+            ' game/CMakeLists.txt
+            cat <<'CMAKE'
+          add_executable(check_profile main.cpp)
+          target_compile_features(check_profile PRIVATE cxx_std_17)
+          target_include_directories(check_profile PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+          if(WIN32)
+              target_sources(check_profile PRIVATE "$ENV{GITHUB_WORKSPACE}/test-zlib/crc32.c")
+              target_include_directories(check_profile PRIVATE "$ENV{GITHUB_WORKSPACE}/test-zlib")
+          else()
+              find_package(ZLIB REQUIRED)
+              target_link_libraries(check_profile PRIVATE ZLIB::ZLIB)
+          endif()
+          CMAKE
+          } > "$run/game/CMakeLists.txt"
+
+          cmake -S "$run/game" -B "$run/real"
+          grep -F '14515152u, 2348310940u' "$run/real/known_elf_profiles.inc"
+          grep -F '14515488u, 4247116667u' "$run/real/known_elf_profiles.inc"
+
+          cat > "$run/versions/profiles.json" <<'JSON'
+          {"profiles":[{"id":"BCUS98124-1.00","elf_bytes":25,"elf_crc32":3699158389},{"id":"BCUS98124-1.20","elf_bytes":23,"elf_crc32":2856548834}]}
+          JSON
+          for profile in 1.00 1.20; do
+            cmake -S "$run/game" -B "$run/$profile" -DRACACIT_GAME_PROFILE="BCUS98124-$profile"
+            cmake --build "$run/$profile" --config Release --parallel 2
+            if [ "$RUNNER_OS" = Windows ]; then
+              "$run/$profile/Release/check_profile.exe"
+            else
+              "$run/$profile/check_profile"
+            fi
+          done
+      - name: Check the 1.20 host rewrite
+        if: runner.os == 'Linux'
+        run: python3 -B -m unittest discover -s tests -p test_update120_host.py
