@@ -17447,7 +17447,7 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 00000000..49b1ca0e
+index 00000000..dd6ad7aa
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
 @@ -0,0 +1,2420 @@
@@ -18444,12 +18444,12 @@ index 00000000..49b1ca0e
 +    UNLOCK();
 +}
 +
-+int rsx_host_ui_take_weapon_scroll(void)
++int rsx_host_ui_take_weapon_scroll(int can_switch)
 +{
 +    if (!s_weapon_scroll_supported) return 0;
 +    LOCK();
 +    const int captured = s_mcap || (s_mtest && !s_win);
-+    if (!captured || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active)
++    if (!can_switch || !captured || !s_opt.kbm || !s_opt.weapon_scroll || s_open || s_sv_active)
 +        s_weapon_scroll = 0;
 +    else
 +        expire_weapon_scroll(SDL_GetTicks64());
@@ -19861,7 +19861,7 @@ index 00000000..49b1ca0e
 +int  rsx_host_ui_modal(void) { return 0; }
 +volatile int g_racacit_kbm_on;
 +void rsx_host_ui_enable_weapon_scroll(void) {}
-+int rsx_host_ui_take_weapon_scroll(void) { return 0; }
++int rsx_host_ui_take_weapon_scroll(int can_switch) { (void)can_switch; return 0; }
 +int  rsx_host_ui_mouse_take(int* dx, int* dy, int* wheel, unsigned* buttons) { *dx = *dy = *wheel = 0; *buttons = 0; return 0; }
 +int  rsx_host_ui_test_key(int key) { (void)key; return 0; }
 +unsigned rsx_host_ui_sheet(unsigned char* out) { (void)out; return 0; }
@@ -19873,10 +19873,10 @@ index 00000000..49b1ca0e
 +#endif
 diff --git a/libs/video/rsx_host_ui.h b/libs/video/rsx_host_ui.h
 new file mode 100644
-index 00000000..c6436a5f
+index 00000000..3545f1fe
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.h
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,262 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display (RaCACiT)
 + *
@@ -20016,7 +20016,8 @@ index 00000000..c6436a5f
 + * (a scancode, or 512 + mouse button 1-5) -- or, for -1, any key. */
 +extern volatile int g_racacit_kbm_on;
 +void rsx_host_ui_enable_weapon_scroll(void);
-+int rsx_host_ui_take_weapon_scroll(void);
++/* With can_switch off, discard pending steps and any fractional remainder. */
++int rsx_host_ui_take_weapon_scroll(int can_switch);
 +int rsx_host_ui_mouse_take(int* dx, int* dy, int* wheel, unsigned* buttons);
 +int rsx_host_ui_test_key(int key);
 +

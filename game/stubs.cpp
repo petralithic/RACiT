@@ -737,7 +737,7 @@ extern "C" void racit_scroll_equip(ppu_context* ctx, uint32_t hud, uint32_t hero
     // Called on the HUD tick on the fallthrough of its weapon-switch gate.
     // The guest resolves the hero and checks its equip state before this point.
     if (!hero || vm_read8(hud + 0x44FD4) || vm_read8(hud + 0x3858 + 0x8B77)) return;
-    const int steps = rsx_host_ui_take_weapon_scroll();
+    const int steps = rsx_host_ui_take_weapon_scroll(true);
     if (!steps) return;
 
     const auto player = quick_select_player(ctx);
@@ -768,10 +768,9 @@ extern "C" int racit_scroll_quick_select(ppu_context* ctx, uint32_t menu)
 {
     // The game copies enabled rings into a compact menu array. Use those page
     // numbers while the menu is open so its own selection and close still work.
-    if (vm_read8(menu + 0x8B78)) return -1; // gadget view
     const auto pages = vm_read32(menu + 0x8804);
-    if (!pages || pages > quick_pages_max) return -1;
-    const int steps = rsx_host_ui_take_weapon_scroll();
+    const bool weapon_view = !vm_read8(menu + 0x8B78);
+    const int steps = rsx_host_ui_take_weapon_scroll(weapon_view && pages > 0 && pages <= quick_pages_max);
     if (!steps) return -1;
 
     const auto player = quick_select_player(ctx);
