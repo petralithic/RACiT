@@ -22,6 +22,7 @@ extern char** environ;
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -1804,7 +1805,8 @@ std::string Store::shader_build_tag() const
 
 int Store::shader_status() const
 {
-    if (shader_variants() == 0) return SH_NONE;
+    const int recorded = shader_variants();
+    if (recorded == 0) return SH_NONE;
     const auto stamp = shader_stamp(), state = shader_state();
     if (stamp.empty()) return SH_NEVER;
     const auto drv = state.find("driver"), sdrv = stamp.find("driver");
@@ -1813,6 +1815,26 @@ int Store::shader_status() const
         (drv != state.end() && (sdrv == stamp.end() || drv->second != sdrv->second))) return SH_DRIVER;
     const auto b = stamp.find("build");
     if (b == stamp.end() || b->second != shader_build_tag()) return SH_BUILD;
+
+    auto count = [&](const char* key) {
+        const auto entry = stamp.find(key);
+        if (entry == stamp.end()) return -1;
+        int value = 0;
+        const char* end = entry->second.data() + entry->second.size();
+        const auto parsed = std::from_chars(entry->second.data(), end, value);
+        return parsed.ec == std::errc{} && parsed.ptr == end ? value : -1;
+    };
+    if (count("variants") != recorded || count("built") != recorded || count("failed") != 0 || count("absent") != 0)
+        return SH_INCOMPLETE;
+    if (cs != state.end() && cs->second == "empty") return SH_INCOMPLETE;
+
+    std::error_code ec;
+    const auto bytes = fs::file_size(cache() / L"pipelinecache.bin", ec);
+    if (ec || bytes < 32) return SH_INCOMPLETE; // the Vulkan pipeline cache header is 32 bytes
+    const auto prepared_at = fs::last_write_time(cache() / L"shaders.stamp", ec);
+    if (ec) return SH_INCOMPLETE;
+    const auto recorded_at = fs::last_write_time(cache() / L"pipelinelist.bin", ec);
+    if (ec || recorded_at > prepared_at) return SH_INCOMPLETE;
     return SH_READY;
 }
 

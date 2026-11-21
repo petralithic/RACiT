@@ -218,7 +218,7 @@ public:
     std::map<std::string, std::string> shader_stamp() const;
     std::map<std::string, std::string> shader_state() const;
     std::string shader_build_tag() const;            // the build selected for Play
-    enum { SH_READY, SH_NONE, SH_NEVER, SH_DRIVER, SH_BUILD };
+    enum { SH_READY, SH_NONE, SH_NEVER, SH_DRIVER, SH_BUILD, SH_INCOMPLETE };
     int shader_status() const;
     // state 0 starting, 1 reading, 2 building, 3 done, 4 failed, 5 updating shader text; false: none yet.
     bool shader_progress(int out[5]) const;

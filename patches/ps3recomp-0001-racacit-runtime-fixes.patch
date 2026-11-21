@@ -21110,7 +21110,7 @@ index ecc53fc..e8d4ad6 100644
      const u8* ucode, u32 max_bytes, u32 vtex_mask, u32 input_mask,
      char* out, u32 out_size);
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index e2687b7..8f4c0d7 100644
+index e2687b7..5edac20 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -38,10 +38,13 @@
@@ -26085,7 +26085,7 @@ index e2687b7..8f4c0d7 100644
  
 -static int vk_eng_translate(const char* hlsl, int stage, VkShaderModule* out)
 +/* After rsx_vulkan_backend_init with RACACIT_PREPARE=1 (main.cpp). Writes
-+ * <cache folder>/shaders.stamp. Returns 0 when no variant failed. */
++ * <cache folder>/shaders.stamp. Returns 0 when all recorded variants were built. */
 +static int vk_prepare_shaders_run(void);
 +int rsx_vulkan_prepare_shaders(void)
  {
@@ -26214,7 +26214,7 @@ index e2687b7..8f4c0d7 100644
 +    }
 +    vk_shaders_state("ok");
 +    SDL_AtomicSet(&s_prep.state, 3);
-+    return failed ? -1 : 0;
++    return (failed || absent) ? -1 : 0;
  }
  
 -static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_hlsl,

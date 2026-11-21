@@ -1128,7 +1128,8 @@ static void stop_game()
 // all cores, then exits (rsx_vulkan_prepare_shaders); where a new build changed the shader text, it
 // makes the text again from programlist.bin first.
 static const char* const k_sh_short[] = { "Ready", "None recorded yet", "Not prepared yet",
-                                          "Graphics driver changed: prepare again", "New build: prepare again" };
+                                          "Graphics driver changed: prepare again", "New build: prepare again",
+                                          "Preparation incomplete" };
 static void shaders_screen();
 static void prepare_shaders()
 {
@@ -1170,6 +1171,13 @@ static void prepare_shaders()
         return (code == 1 ? std::string("Some pipelines could not be prepared") : std::string("The prepare ended with code ") + hx) + details;
     }, [](const std::string& r) {
         if (!r.empty()) { message("Prepare shaders", r); refresh(); return; }
+        const int status = S->shader_status();
+        if (status != Store::SH_READY) {
+            message("Prepare shaders", status == Store::SH_NONE ? "Play to record pipelines first."
+                : "Some recorded pipelines still need preparation. Open Shaders for details.");
+            refresh();
+            return;
+        }
         const auto stamp = S->shader_stamp();
         auto v = [&](const char* k) { auto it = stamp.find(k); return it == stamp.end() ? std::string("?") : it->second; };
         std::string t = v("built") + " of " + v("variants") + " pipelines built in " + v("seconds") + " s on " + v("threads") + " threads.";
@@ -1189,7 +1197,8 @@ static void shaders_screen()
         "Nothing recorded yet. The game records each pipeline the first time it draws it: play a while, then come back.",
         "Not prepared on this PC yet. Preparing builds them now, so nothing shows in the wrong colours the first time it is drawn.",
         "The graphics driver changed since the last prepare: its pipelines have to be built again.",
-        "Prepared for another build. Prepare again for this one." };
+        "Prepared for another build. Prepare again for this one.",
+        "Some pipelines still need preparation. Use Prepare Shaders to refresh the cache." };
     scr.info.push_back({ "Now", said[st], st == Store::SH_READY ? col::TEXT_GOOD : st == Store::SH_NONE ? col::TEXT_DIM : col::ORANGE });
     scr.info.push_back({ "Recorded", std::to_string(n) + (n == 1 ? " pipeline" : " pipelines") });
     const auto stamp = S->shader_stamp();
