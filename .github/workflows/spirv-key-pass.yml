@@ -1,0 +1,59 @@
+name: SPIR-V cache key compatibility
+on:
+  push:
+    branches: ['ci/run/racit-shader-hashes-20261121']
+permissions:
+  contents: read
+jobs:
+  cache:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+      - name: Extract the patched cache and its previous key generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=patches/ps3recomp-0001-racacit-runtime-fixes.patch
+          src=tools/ps3recomp/libs/video/rsx_shader_spirv.cpp
+          include=(--ignore-whitespace --include=libs/video/rsx_shader_spirv.cpp)
+          git init -q tools/ps3recomp
+          git -C tools/ps3recomp fetch --depth 1 https://github.com/sp00nznet/ps3recomp.git 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+          git -C tools/ps3recomp -c core.autocrlf=false checkout --detach FETCH_HEAD
+          git -C tools/ps3recomp apply "${include[@]}" "../../$patch"
+          awk '/^\/\* SPIR-V cache\./ { emit=1; found=1 }
+            /^#else \/\* !PS3RECOMP_HAVE_SPIRV_TRANSLATION/ { emit=0 }
+            emit { print }
+            END { if (!found || emit) exit 1 }' "$src" > tests/spirv_key_cache.inc
+          git -C tools/ps3recomp apply --reverse "${include[@]}" "../../$patch"
+          git show "HEAD~2:$patch" | git -C tools/ps3recomp apply "${include[@]}"
+          awk '/^Key make_key\(/ { emit=1 }
+               emit { print; if ($0 == "}") exit }' "$src" > tests/spirv_legacy_key.inc
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+      - name: Exercise existing cache keys and measure key generation on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $run = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/spirv-keys"
+          Push-Location $run
+          cl /nologo /O2 /std:c++17 /EHsc /W4 /D_CRT_SECURE_NO_WARNINGS "$env:GITHUB_WORKSPACE/tests/spirv_key_fixture.cpp" /Fecheck.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\check.exe
+          exit $LASTEXITCODE
+      - name: Exercise existing cache keys and measure key generation on POSIX
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(mktemp -d "$RUNNER_TEMP/spirv-keys.XXXXXXXX")
+          cd "$run"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/spirv_key_fixture.cpp" -o check
+          ./check
