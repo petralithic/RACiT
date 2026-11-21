@@ -558,7 +558,8 @@ std::string Store::prepare_update_hdd()
     if (!fs::copy_file(update_dir() / L"PARAM.SFO", inst / L"PARAM.SFO", fs::copy_options::overwrite_existing, ec))
         return "cannot copy PARAM.SFO into " + u8(inst) + ": " + ec.message();
     Progress p;
-    std::string r = copy_tree(update_dir() / L"USRDIR", inst / L"USRDIR", &p, reuse_unchanged);
+    const auto mode = reuse_unchanged ? CopyMode::ReuseUnchanged : CopyMode::Normal;
+    std::string r = copy_tree(update_dir() / L"USRDIR", inst / L"USRDIR", &p, mode);
     if (!r.empty()) return r;
     const fs::path disc = hdd() / L"game" / L"BCUS98124";
     if (fs::exists(disc, ec) && fs::is_directory(disc, ec))
@@ -1619,7 +1620,7 @@ std::string Store::backup_saves(const std::string& why, fs::path* made)
         fs::remove(got, ec);
         got = folder;
         Progress p;
-        const std::string r2 = copy_tree(saves(), got, &p);
+        const std::string r2 = copy_tree(saves(), got, &p, CopyMode::RequireReadable);
         if (!r2.empty()) { delete_tree(got); return r + "; a plain copy failed too: " + r2; }
     }
     if (made) *made = got;
@@ -1637,52 +1638,101 @@ std::string Store::export_saves(const fs::path& zip)
     return zip_create(saves(), zip);
 }
 
-static std::vector<fs::path> find_slots(const fs::path& dir)
+static std::vector<fs::path> find_slots(const fs::path& dir, std::error_code& ec)
 {
     std::vector<fs::path> out;
-    std::error_code ec;
     for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (it.depth() > 3) { it.disable_recursion_pending(); continue; }
         if (it->is_directory(ec) && is_save_folder(u8(it->path().filename()))) { out.push_back(it->path()); it.disable_recursion_pending(); }
+        if (ec) break;
     }
     return out;
 }
 
-std::string Store::import_saves(const fs::path& zip)
+std::string Store::import_saves(const fs::path& input)
 {
-    std::error_code dec;
-    if (fs::is_directory(zip, dec)) {               /* a folder backup (tar.exe failed when it was made) */
-        const auto slots = find_slots(zip);
-        if (slots.empty()) return std::string("No ") + g_prof->name + " saves in that backup.";
-        std::string r = backup_saves("before-import", nullptr);
-        if (!r.empty()) return "Backing up the current saves failed: " + r;
-        fs::create_directories(saves(), dec);
-        for (auto& s : slots) {
-            const fs::path dst = saves() / s.filename();
-            delete_tree(dst);
-            Progress p;
-            r = copy_tree(s, dst, &p);
-            if (!r.empty()) return r;
-        }
-        return {};
-    }
-    const fs::path tmp = data() / L".save-import";
-    delete_tree(tmp);
-    std::string r = zip_extract(zip, tmp);
-    if (!r.empty()) { delete_tree(tmp); return r; }
-    const auto slots = find_slots(tmp);
-    if (slots.empty()) { delete_tree(tmp); return std::string("No ") + g_prof->name + " saves in that zip."; }
-    r = backup_saves("before-import", nullptr);
-    if (!r.empty()) { delete_tree(tmp); return "Backing up the current saves failed: " + r; }
     std::error_code ec;
-    fs::create_directories(saves(), ec);
-    for (auto& s : slots) {
-        const fs::path dst = saves() / s.filename();
-        delete_tree(dst);
-        fs::rename(s, dst, ec);
-        if (ec) { Progress p; r = copy_tree(s, dst, &p); if (!r.empty()) { delete_tree(tmp); return r; } }
+    const bool folder = fs::is_directory(input, ec);
+    if (ec) return "Could not open " + u8(input) + ": " + ec.message();
+    const fs::path save_dir = saves();
+    fs::create_directories(save_dir, ec);
+    if (ec) return "Could not open the save folder: " + ec.message();
+    const fs::path stage = save_dir.parent_path() / L".save-restore";
+    if (!fs::create_directory(stage, ec)) {
+        if (ec) return "Could not prepare the restore folder: " + ec.message();
+        return "A save restore is active or has files left to recover in " + u8(stage) + ".";
     }
-    delete_tree(tmp);
+    const auto stop = [&](const std::string& error) {
+        if (!delete_tree(stage)) return error + "\nCould not remove the temporary folder " + u8(stage) + ".";
+        return error;
+    };
+
+    const fs::path extracted = stage / L"extracted";
+    if (!folder) {
+        const fs::path zip = fs::absolute(input, ec);
+        if (ec) return stop("Could not locate the save ZIP: " + ec.message());
+        const std::string error = zip_extract(zip, extracted);
+        if (!error.empty()) return stop(error);
+    }
+    const auto slots = find_slots(folder ? input : extracted, ec);
+    if (ec) return stop("Could not read the save backup: " + ec.message());
+    if (slots.empty()) return stop(std::string("No ") + g_prof->name + " saves in that backup.");
+
+    const fs::path incoming = stage / L"incoming";
+    const fs::path originals = stage / L"originals";
+    for (const auto& dir : {incoming, originals}) {
+        fs::create_directory(dir, ec);
+        if (ec) return stop("Could not prepare the restore folder: " + ec.message());
+    }
+    for (const auto& slot : slots) {
+        const fs::path staged_slot = incoming / slot.filename();
+        if (!fs::create_directory(staged_slot, ec)) {
+            if (ec) return stop("Could not stage " + u8(slot.filename()) + ": " + ec.message());
+            return stop("The backup contains more than one copy of " + u8(slot.filename()) + ".");
+        }
+        const std::string error = copy_tree(slot, staged_slot, nullptr, CopyMode::RequireReadable);
+        if (!error.empty()) return stop(error);
+    }
+
+    const std::string backup_error = backup_saves("before-import", nullptr);
+    if (!backup_error.empty()) return stop("Backing up the current saves failed: " + backup_error);
+    struct Swap {
+        fs::path name;
+        bool saved_original = false;
+        bool installed = false;
+    };
+    std::vector<Swap> swaps;
+    swaps.reserve(slots.size());
+    for (const auto& slot : slots) swaps.push_back({slot.filename()});
+    for (auto& swap : swaps) {
+        const fs::path dest = save_dir / swap.name;
+        const auto status = fs::symlink_status(dest, ec);
+        if (status.type() == fs::file_type::not_found) ec.clear();
+        if (!ec && fs::exists(status)) {
+            fs::rename(dest, originals / swap.name, ec);
+            swap.saved_original = !ec;
+        }
+        if (!ec) {
+            fs::rename(incoming / swap.name, dest, ec);
+            swap.installed = !ec;
+        }
+        if (!ec) continue;
+
+        const std::string error = "Could not restore " + u8(swap.name) + ": " + ec.message();
+        bool recovered = true;
+        for (auto it = swaps.rbegin(); it != swaps.rend(); ++it) {
+            if (!it->installed && !it->saved_original) continue;
+            std::error_code undo_error;
+            const fs::path path = save_dir / it->name;
+            if (it->installed) fs::rename(path, incoming / it->name, undo_error);
+            if (!undo_error && it->saved_original) fs::rename(originals / it->name, path, undo_error);
+            if (undo_error) recovered = false;
+        }
+        if (recovered) return stop(error);
+        return error + "\nCould not roll back every slot. Original saves are available in " + u8(originals) + ".";
+    }
+    // The normal backup is now the undo point. A cleanup error leaves the originals on disk.
+    if (!delete_tree(stage)) return "Saves were restored. Could not remove the temporary folder " + u8(stage) + ".";
     return {};
 }
 

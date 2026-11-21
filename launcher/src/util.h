@@ -53,7 +53,8 @@ inline bool same_file_size_and_time(const fs::path& src, const fs::path& dst)
 }
 // Copies dir's contents into dst (created), adding to p->done for bytes copied.
 // Returns "" on success, else why it stopped.
-std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p, bool reuse_unchanged = false);
+enum class CopyMode { Normal, ReuseUnchanged, RequireReadable };
+std::string copy_tree(const fs::path& src, const fs::path& dst, Progress* p, CopyMode mode = CopyMode::Normal);
 bool delete_tree(const fs::path& p);
 
 // Hidden child process; waits. Returns the exit code, -1 if it did not start.
