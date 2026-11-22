@@ -305,12 +305,18 @@ static void option_value(const Opt& o, std::string* value, std::string* label, i
     *choices = o.ch;
     if (choices->empty()) *choices = percent_choices(!strcmp(o.key, "RACACIT_DS_RUMBLE") ? 10 : 5, !strcmp(o.key, "RACACIT_DS_RUMBLE"));
     *value = S->settings.get(o.key, o.def);
+    *index = -1;
     const bool window_size = !strcmp(o.key, "RACACIT_WINDOW_SIZE");
     if (window_size && !value->empty()) {
         const auto size = parse_custom_window_size(*value);
-        if (!size.empty()) *value = size;
+        const auto x = value->find('x');
+        // The runtime expects a lowercase x directly after the width.
+        if (size.empty() || x == std::string::npos || x == 0 || !isdigit((unsigned char)(*value)[x - 1])) {
+            *label = "Check saved size";
+            return;
+        }
+        *value = size;
     }
-    *index = -1;
     for (size_t i = 0; i < choices->size(); i++) {
         const std::string& c = (*choices)[i].first;
         if (c == *value || (!window_size && !c.empty() && !value->empty() &&
@@ -1971,7 +1977,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         if (const int k = hit_side(x, y); k >= 0) { switch_game(k); return 0; }
         const int i = hit_item(x, y);
-        if (i < 0) return 0;
+        if (i < 0) { if (editing) { editing = false; redraw(); } return 0; }
         if (i != focus) editing = false;
         focus = i;
         Item& it = scr.items[i];

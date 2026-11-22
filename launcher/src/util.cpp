@@ -70,6 +70,7 @@ bool write_text_atomic(const fs::path& p, const std::string& text)
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return false;
         f.write(text.data(), (std::streamsize)text.size());
+        f.close();
         if (!f) return false;
     }
     return MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
