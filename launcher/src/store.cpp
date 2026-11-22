@@ -104,6 +104,8 @@ static bool same_key(const std::string& a, const std::string& b) { return lower(
 bool SettingsFile::load()
 {
     lines.clear();
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) return false;
     std::ifstream input(path, std::ios::binary);
     if (!input) return false;
     std::string t;
