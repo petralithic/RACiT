@@ -2301,7 +2301,7 @@ index 5166a47..c82129b 100644
                     (uint32_t)(uintptr_t)buf,
                     (unsigned long long)nbytes, (unsigned long long)bytes_read);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index f2b4c11..e3411a3 100644
+index f2b4c11..888d968 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -12,11 +12,13 @@
@@ -2942,7 +2942,7 @@ index f2b4c11..e3411a3 100644
  
          s_host_state[i].buttons = btns;
  
-@@ -356,26 +915,365 @@ static void pad_poll_sdl2(void)
+@@ -356,26 +915,369 @@ static void pad_poll_sdl2(void)
          s_host_state[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
          s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
          s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
@@ -2957,7 +2957,7 @@ index f2b4c11..e3411a3 100644
 +            ds5_weapon(&st[10], 3, 6, 8);
 +            ds5_send(gc, st);
 +        }
-+    }
+     }
 +    pad_poll_sdl_fallbacks();
 +}
 +
@@ -3032,13 +3032,16 @@ index f2b4c11..e3411a3 100644
 +int racit_keyboard_prompts_active(void) { return SDL_AtomicGet(&s_racit_keyboard_prompts); }
 +static int s_kbm_on = -1;             /* allowed this run (PAD_NO_KEYBOARD) */
 +static int s_skip_key_held;           /* the SKIP_PUZZLE key, this poll */
-+/* The menu's keycap for the skip key: its first binding's name. */
++static void kb_init(int ignore_real);
 +const char* racit_skip_puzzle_key_name(void)
 +{
 +    static char name[32];
-+    const char* v = getenv("RACACIT_BIND_SKIP_PUZZLE");
-+    snprintf(name, sizeof name, "%s", v && *v ? v : "F2");
-+    char* c = strchr(name, ','); if (c) *c = 0;
++    kb_init(1);
++    const int key = s_kb_keys[KB_SKIP_PUZZLE][0];
++    if (!s_kbm_on || key < 0) return NULL;
++    if (key >= 520) snprintf(name, sizeof name, "%s", key == 520 ? "WheelUp" : "WheelDown");
++    else if (key >= 512) snprintf(name, sizeof name, "Mouse%d", key - 512);
++    else snprintf(name, sizeof name, "%s", SDL_GetScancodeName((SDL_Scancode)key));
 +    return name;
 +}
 +extern volatile int g_racacit_kbm_on;   /* rsx_host_ui.c: capture the mouse on a click */
@@ -3069,7 +3072,8 @@ index f2b4c11..e3411a3 100644
 +            if (c) *c = 0;
 +            while (*tok == ' ') tok++;
 +            char* end = tok + strlen(tok); while (end > tok && end[-1] == ' ') *--end = 0;
-+            const int key = kb_parse_one(tok);
++            const int parsed = kb_parse_one(tok);
++            const int key = k == KB_SKIP_PUZZLE && parsed == SDL_SCANCODE_F1 ? -1 : parsed;
 +            if (key >= 0) { s_kb_keys[k][n++] = key; if (k >= KB_QS_1) s_kb_is_qs[key] = 1; }
 +            else if (*tok && SDL_strcasecmp(tok, "none")) fprintf(stderr, "[cellPad] %s: unknown key \"%s\"%c", env, tok, 10);
 +            tok = c ? c + 1 : NULL;
@@ -3084,6 +3088,7 @@ index f2b4c11..e3411a3 100644
 +{
 +    kb_init(ignore_real);
 +    rsx_host_options opt; rsx_host_ui_options(&opt);
++    s_skip_key_held = 0;
 +    g_racacit_kbm_on = s_kbm_on && opt.kbm && !ignore_real;
 +    if (!s_kbm_on || !opt.kbm || !SDL_WasInit(SDL_INIT_VIDEO)) return;
 +    int dx = 0, dy = 0, wheel = 0; unsigned mb = 0;
@@ -3093,7 +3098,6 @@ index f2b4c11..e3411a3 100644
 +    const Uint8* ks = !ignore_real && SDL_GetKeyboardFocus() ? SDL_GetKeyboardState(NULL) : NULL;
 +    const int test = rsx_host_ui_test_key(-1);
 +    int held[KB_N] = { 0 }, held_open[KB_N] = { 0 };
-+    s_skip_key_held = 0;
 +    if (ks || test)
 +        for (int k = 0; k < KB_N; k++)
 +            for (int i = 0; i < KB_MAX_KEYS && s_kb_keys[k][i] >= 0; i++) {
@@ -3251,9 +3255,9 @@ index f2b4c11..e3411a3 100644
 +        hs->press_up = (b & CELL_PAD_CTRL_UP) ? 255 : 0;  hs->press_down  = (b & CELL_PAD_CTRL_DOWN)  ? 255 : 0;
 +        hs->press_left = (b & CELL_PAD_CTRL_LEFT) ? 255 : 0; hs->press_right = (b & CELL_PAD_CTRL_RIGHT) ? 255 : 0;
 +        hs->press_l1 = (b & CELL_PAD_CTRL_L1) ? 255 : 0;  hs->press_r1 = (b & CELL_PAD_CTRL_R1) ? 255 : 0;
-     }
- }
- 
++    }
++}
++
 +/* Extra controller mappings: gamecontrollerdb.txt (SDL's format, e.g. the
 + * community SDL_GameControllerDB file) next to the exe, in the working folder,
 + * or RACACIT_CONTROLLER_DB=<file>. SDL_GAMECONTROLLERCONFIG works too. SDL
@@ -3269,8 +3273,8 @@ index f2b4c11..e3411a3 100644
 +    const int k = SDL_GameControllerAddMappingsFromFile("gamecontrollerdb.txt");
 +    if (k > 0) fprintf(stderr, "[cellPad] %d controller mappings from gamecontrollerdb.txt%c", k, 10);
 +    (void)n;
-+}
-+
+ }
+ 
  static void pad_init_backend(void)
  {
 +    /* Face buttons by position on every controller: the bottom one is Cross,
@@ -3316,7 +3320,7 @@ index f2b4c11..e3411a3 100644
  }
  
  static void pad_shutdown_backend(void)
-@@ -421,6 +1319,62 @@ static unsigned long long pad_now_ms(void)
+@@ -421,6 +1323,62 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -3379,11 +3383,19 @@ index f2b4c11..e3411a3 100644
  static void pad_poll_backend(void)
  {
      /* Benign race: two threads may poll in the same tick. That costs one extra
-@@ -439,9 +1393,49 @@ static void pad_poll_backend(void)
+@@ -439,9 +1397,48 @@ static void pad_poll_backend(void)
  #elif PAD_BACKEND_SDL2
      pad_poll_sdl2();
  #endif
 -#ifdef _WIN32
++    /* Sample real controllers before keyboard input can join port zero. */
++    unsigned int puzzle_ports = 0;
++    const u16 puzzle_chord = CELL_PAD_CTRL_R3 | CELL_PAD_CTRL_DOWN;
++    for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
++        const PadHostState* pad = &s_host_state[i];
++        if (pad->connected && (pad->buttons & puzzle_chord) == puzzle_chord)
++            puzzle_ports |= 1u << i;
++    }
 +#if PAD_BACKEND_XINPUT
      if (!s_host_state[0].connected) pad_poll_keyboard();
  #endif
@@ -3409,28 +3421,19 @@ index f2b4c11..e3411a3 100644
 +    }
 +    pad_poll_kbm(ign);
 +#endif
-+    /* Skip puzzles: the skip key, or L3 + R3 held together on a controller (both
-+     * stick clicks, which no puzzle uses together); game/skip_puzzles.cpp decides. */
-+    {
-+        int l3 = 0, r3 = 0;
-+        for (int i = 0; i < PAD_MAX_HOST_PORTS; i++)
-+            if (s_host_state[i].connected) {
-+                l3 |= (s_host_state[i].buttons & CELL_PAD_CTRL_L3) != 0;
-+                r3 |= (s_host_state[i].buttons & CELL_PAD_CTRL_R3) != 0;
-+            }
 +#if PAD_BACKEND_SDL2
-+        const int key = s_skip_key_held;
++    const int puzzle_key = s_skip_key_held;
 +#else
-+        const int key = 0;
++    const int puzzle_key = 0;
 +#endif
-+        racit_skip_puzzle_input(key, l3, r3);
-+    }
++    racit_skip_puzzle_input(puzzle_key, ign ? 0 : puzzle_ports,
++        rsx_host_ui_capturing() || rsx_host_ui_menu_requested());
 +    pad_note_human();
 +    pad_ui_capture();
  }
  
  /* ---------------------------------------------------------------------------
-@@ -466,6 +1460,14 @@ s32 cellPadInit(u32 max_connect)
+@@ -466,6 +1463,14 @@ s32 cellPadInit(u32 max_connect)
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
      memset(s_host_state, 0, sizeof(s_host_state));
@@ -3445,7 +3448,7 @@ index f2b4c11..e3411a3 100644
  
      pad_init_backend();
  
-@@ -502,6 +1504,103 @@ void cellPad_poll(void)
+@@ -502,6 +1507,103 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -3549,7 +3552,7 @@ index f2b4c11..e3411a3 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -518,6 +1617,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+@@ -518,6 +1620,7 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  
      /* Poll fresh state */
      pad_poll_backend();
@@ -3557,7 +3560,7 @@ index f2b4c11..e3411a3 100644
  
      /* YDKJ_INJECT_PAD: the game's wait loop polls the pad (cellPadSetActDirect /
       * GetData) -- if it's parked on a "press button" prompt after loading, no
-@@ -601,7 +1701,7 @@ skip_inject: ;
+@@ -601,7 +1704,7 @@ skip_inject: ;
       * human at the pad. Env-gated test scaffolding, off by default. */
      { static int s_ap = -1; static unsigned s_apn = 0;
        if (s_ap < 0) s_ap = getenv("PAD_AUTOPRESS") ? 1 : 0;
@@ -3566,7 +3569,7 @@ index f2b4c11..e3411a3 100644
            unsigned ph = s_apn++ % 240;
            if (ph < 12)
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= 0x40;   /* CROSS */
-@@ -636,7 +1736,7 @@ skip_inject: ;
+@@ -636,7 +1739,7 @@ skip_inject: ;
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
            }
        }
@@ -3575,7 +3578,7 @@ index f2b4c11..e3411a3 100644
            double now = (double)(GetTickCount64() - t0) / 1000.0;
            /* Latch, do not window. A fixed time window is missed whenever the
             * title stops polling the pad for longer than the window (it does
-@@ -672,30 +1772,87 @@ skip_inject: ;
+@@ -672,30 +1775,87 @@ skip_inject: ;
       */
      { static int s_pf = -1; static char pf_path[512];
        static unsigned held_mask = 0; static int held_n = 0;
@@ -3624,7 +3627,7 @@ index f2b4c11..e3411a3 100644
 +                      for (char* t = strtok(buf, ";"); t && q_n < 8; t = strtok(NULL, ";")) {
 +                          strncpy(q_steps[q_n], t, sizeof q_steps[0] - 1); q_steps[q_n][sizeof q_steps[0] - 1] = 0; q_n++; }
 +                      if (q_n) { strncpy(buf, q_steps[0], sizeof buf - 1); buf[sizeof buf - 1] = 0; q_i = 1; }
-+                  }
+                   }
 +              }
 +              if (have) {
 +                  {
@@ -3637,7 +3640,7 @@ index f2b4c11..e3411a3 100644
 +                          if (held_stick) { held_ax[0] = (unsigned char)lx; held_ax[1] = (unsigned char)ly;
 +                                            held_ax[2] = (unsigned char)rx; held_ax[3] = (unsigned char)ry; }
 +                          printf("[cellPad] PAD_FILE press 0x%04X%s\n", m, held_stick ? " +stick" : ""); fflush(stdout); }
-                   }
++                  }
 +              }
 +              if (f) {
                    fclose(f);
@@ -3674,7 +3677,7 @@ index f2b4c11..e3411a3 100644
      /* Analog sticks */
      /* PAD_STICK="lx,ly,rx,ry" (0-255, 128 = centred): hold the analog sticks at
       * fixed positions. Rubber Ducky drives its camera from the sticks and never
-@@ -714,7 +1871,7 @@ skip_inject: ;
+@@ -714,7 +1874,7 @@ skip_inject: ;
                   sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
                   s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
                   s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
@@ -3683,7 +3686,7 @@ index f2b4c11..e3411a3 100644
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
-@@ -725,7 +1882,7 @@ skip_inject: ;
+@@ -725,7 +1885,7 @@ skip_inject: ;
        { static int sw = -1; static clock_t t0 = 0;
          if (sw < 0) { const char* e = getenv("PAD_SWEEP");
                        sw = e ? atoi(e) : 0; if (sw < 0) sw = 0; }
@@ -3692,7 +3695,7 @@ index f2b4c11..e3411a3 100644
              static const unsigned char steps[9][4] = {
                  {128,128,128,128},
                  {128,  0,128,128}, {128,255,128,128},
-@@ -793,10 +1950,40 @@ skip_inject: ;
+@@ -793,10 +1953,40 @@ skip_inject: ;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Y] = 399; /* gravity */
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_Z] = 512;
          data->button[CELL_PAD_BTN_OFFSET_SENSOR_G] = 512;
@@ -3733,7 +3736,7 @@ index f2b4c11..e3411a3 100644
      /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
       * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
       * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's
-@@ -985,7 +2172,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -985,7 +2175,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -3742,7 +3745,7 @@ index f2b4c11..e3411a3 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1082,13 +2269,61 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1082,13 +2272,61 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  #endif
  
  #if PAD_BACKEND_SDL2
@@ -17242,10 +17245,10 @@ index cbec250..4359a3b 100644
   * PSO identity should use rsx_fp_structural_hash in buffered mode. */
 diff --git a/libs/video/rsx_host_ui.c b/libs/video/rsx_host_ui.c
 new file mode 100644
-index 0000000..5ea1b0f
+index 0000000..bfb32f1
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.c
-@@ -0,0 +1,2304 @@
+@@ -0,0 +1,2310 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display. See rsx_host_ui.h.
 + */
@@ -17938,8 +17941,12 @@ index 0000000..5ea1b0f
 +    case R_FPS:    snprintf(b, n, "%s", o->fps ? "On" : "Off"); break;
 +    case R_DISCORD: snprintf(b, n, "%s", o->discord ? "On" : "Off"); break;
 +    case R_SKIPCLANK: snprintf(b, n, "%s", o->skip_clank ? "Skip" : "Play"); break;
-+    case R_SKIPPUZZLE:   /* the skip key as its keycap, and the controller's L3 + R3 */
-+        if (o->skip_puzzles == 2) snprintf(b, n, "Skip key [%s] or L3 + R3", racit_skip_puzzle_key_name());
++    case R_SKIPPUZZLE:
++        if (o->skip_puzzles == 2) {
++            const char* key = racit_skip_puzzle_key_name();
++            if (key) snprintf(b, n, "Skip key [%s] or hold R3 + Down", key);
++            else snprintf(b, n, "Skip: hold R3 + Down");
++        }
 +        else snprintf(b, n, "%s", o->skip_puzzles == 1 ? "Solve at once" : "Play");
 +        break;
 +    case R_SKIPINTRO: snprintf(b, n, "%s", o->skip_intro ? "Skip" : "Show"); break;
@@ -19423,12 +19430,13 @@ index 0000000..5ea1b0f
 +    return r;
 +}
 +
-+static volatile int s_menu_req;
-+void rsx_host_ui_request_menu(void) { s_menu_req = 1; }
++static SDL_atomic_t s_menu_req;
++void rsx_host_ui_request_menu(void) { SDL_AtomicSet(&s_menu_req, 1); }
++int rsx_host_ui_menu_requested(void) { return SDL_AtomicGet(&s_menu_req); }
 +
 +void rsx_host_ui_poll_script(void)
 +{
-+    if (s_menu_req) { s_menu_req = 0; if (!s_open) { s_menu_src = "Select held"; open_menu(1); } }
++    if (SDL_AtomicCAS(&s_menu_req, 1, 0) && !s_open) { s_menu_src = "Select held"; open_menu(1); }
 +    static const char* path = (const char*)-1;
 +    if (path == (const char*)-1) path = getenv("RACACIT_UI_FILE");
 +    if (!path || !*path) return;
@@ -19529,6 +19537,7 @@ index 0000000..5ea1b0f
 +int  rsx_host_ui_event(const union SDL_Event* e) { (void)e; return 0; }
 +int  rsx_host_ui_capturing(void) { return 0; }
 +void rsx_host_ui_request_menu(void) {}
++int rsx_host_ui_menu_requested(void) { return 0; }
 +void rsx_host_ui_set_cheats(const rsx_cheat_api* api) { (void)api; }
 +int  rsx_host_ui_visible(void) { return 0; }
 +void rsx_host_ui_on_present(void) {}
@@ -19552,10 +19561,10 @@ index 0000000..5ea1b0f
 +#endif
 diff --git a/libs/video/rsx_host_ui.h b/libs/video/rsx_host_ui.h
 new file mode 100644
-index 0000000..5146e4e
+index 0000000..3f6e440
 --- /dev/null
 +++ b/libs/video/rsx_host_ui.h
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,267 @@
 +/*
 + * ps3recomp - host settings menu and on-screen display (RaCACiT)
 + *
@@ -19685,6 +19694,7 @@ index 0000000..5146e4e
 +/* Open the menu at the next event pump (cellPad.c, guest threads: Select held
 + * on a controller without a touchpad). */
 +void rsx_host_ui_request_menu(void);
++int rsx_host_ui_menu_requested(void);
 +
 +/* Keyboard and mouse for the game (cellPad.c, guest threads). A click in the
 + * window captures the mouse (relative mode) while cellPad has set
@@ -19811,10 +19821,10 @@ index 0000000..5146e4e
 +
 +/* Skip puzzles (Settings > General > Puzzles). The title's own code
 + * (game/skip_puzzles.cpp) reads the setting's text and does the solving; the
-+ * pad poll (cellPad.c) says when the skip key or L3 + R3 went down. */
++ * pad poll (cellPad.c) reports the skip key and controllers holding R3 + Down. */
 +int racit_skip_puzzles_mode(const char* setting);              /* "off"/"auto"/"key" (or 0/1/2) -> 0/1/2 */
 +void racit_skip_puzzles_set(int mode);                          /* the menu changed it: live */
-+void racit_skip_puzzle_input(int key_held, int l3_held, int r3_held);
++void racit_skip_puzzle_input(int key_held, unsigned int combo_ports, int menu_open);
 +const char* racit_skip_puzzle_key_name(void);                 /* cellPad.c: the skip key's name, for the menu */
 +
 +#ifdef __cplusplus
