@@ -1975,10 +1975,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             for (int k = 0; k < 2; k++) if (ov.btn[k].in(x, y)) { ov.focus = k; overlay_key(VK_RETURN); }
             return 0;
         }
-        if (const int k = hit_side(x, y); k >= 0) { switch_game(k); return 0; }
+        const int side = hit_side(x, y);
         const int i = hit_item(x, y);
-        if (i < 0) { if (editing) { editing = false; redraw(); } return 0; }
-        if (i != focus) editing = false;
+        if (editing && (side >= 0 || i != focus)) { editing = false; redraw(); }
+        if (side >= 0) { switch_game(side); return 0; }
+        if (i < 0) return 0;
         focus = i;
         Item& it = scr.items[i];
         if (it.kind == K_OPTION && it.change) { change(+1); return 0; }   // a click steps to the next value
