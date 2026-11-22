@@ -1676,6 +1676,8 @@ static void android_swap_setup(void)
 
 static void android_setup(int* argc, char*** argv)
 {
+    const char* log_session = *argc == 3 && strcmp((*argv)[1], "--racit-log-session") == 0
+        ? (*argv)[2] : nullptr;
     /* Timer slack: Linux lets every timed sleep or wait run late by the
      * thread's slack, 50 us for a foreground app. An idle SPU worker sleeps
      * 20-160 us (spu_channels.c; Windows uses a high-resolution timer there),
@@ -1726,7 +1728,10 @@ static void android_setup(int* argc, char*** argv)
     snprintf(path, sizeof path, "%s/debug", base);
     if (access(path, F_OK) == 0) {
         snprintf(path, sizeof path, "%s/log.txt", base);
-        if ((log_file = fopen(path, "w"))) setvbuf(log_file, NULL, _IOLBF, 0);
+        if ((log_file = fopen(path, "w"))) {
+            setvbuf(log_file, NULL, _IOLBF, 0);
+            if (log_session) fprintf(log_file, "RACiT log session: %s\n", log_session);
+        }
     }
     {
         int p[2];
@@ -1743,7 +1748,7 @@ static void android_setup(int* argc, char*** argv)
         }
         if (!s_android_log_started && log_file) { /* no pump: write directly */
             fclose(log_file);
-            freopen(path, "w", stdout);
+            freopen(path, "a", stdout);
             freopen(path, "a", stderr);
             setvbuf(stdout, NULL, _IOLBF, 0);
         }

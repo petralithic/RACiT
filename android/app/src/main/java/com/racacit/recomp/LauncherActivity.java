@@ -2356,26 +2356,43 @@ public final class LauncherActivity extends Activity {
         return new ProcessBuilder(command).redirectErrorStream(true);
     }
 
-    private static boolean isCurrentGameLog(File log, long started) {
-        return log.isFile() && log.length() > 0 && (started == 0 || log.lastModified() > started);
+    private static boolean isCurrentGameLog(File log, String sessionId) {
+        if (!log.isFile() || log.length() == 0) return false;
+        if (sessionId.isEmpty()) return true;
+        try (java.io.BufferedReader r = java.nio.file.Files.newBufferedReader(log.toPath(),
+                java.nio.charset.StandardCharsets.UTF_8)) {
+            return ("RACiT log session: " + sessionId).equals(r.readLine());
+        } catch (java.io.IOException e) {
+            return false;
+        }
     }
 
-    private long latestGameLogStart() {
+    private static final class GameLogSession {
+        final long started;
+        final String id;
+        GameLogSession(long started, String id) {
+            this.started = started;
+            this.id = id;
+        }
+    }
+
+    private GameLogSession latestGameLogSession() {
         File marker = new File(getFilesDir(), RecompActivity.GAME_LOG_START);
         try {
             byte[] contents = java.nio.file.Files.readAllBytes(marker.toPath());
-            return Long.parseLong(new String(contents, java.nio.charset.StandardCharsets.UTF_8));
-        } catch (java.io.IOException | NumberFormatException e) {
-            return 0;
-        }
+            String[] fields = new String(contents, java.nio.charset.StandardCharsets.UTF_8).split("\n", 2);
+            if (fields.length == 2 && !fields[1].isEmpty())
+                return new GameLogSession(Long.parseLong(fields[0]), fields[1]);
+        } catch (java.io.IOException | NumberFormatException ignored) { }
+        return new GameLogSession(0, "");
     }
 
     /** Read the current file or logcat when the game exited before opening it. */
     private String readGameLog() {
         StringBuilder b = new StringBuilder();
-        final long started = latestGameLogStart();
+        GameLogSession session = latestGameLogSession();
         File lf = store.log();
-        if (isCurrentGameLog(lf, started)) {
+        if ((!session.id.isEmpty() || store.debugFlag().exists()) && isCurrentGameLog(lf, session.id)) {
             try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(lf, "r")) {
                 long start = Math.max(0, lf.length() - 600000);
                 r.seek(start);
@@ -2384,7 +2401,7 @@ public final class LauncherActivity extends Activity {
                 /* A native crash's backtrace is not in log.txt: Android's crash buffer
                  * has it. First, dated, so the log's own end stays the last lines. */
                 try {
-                    Process p = gameLogcat(started, "crash").start();
+                    Process p = gameLogcat(session.started, "crash").start();
                     try (java.io.BufferedReader cr = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
                         String line; boolean first = true;
                         while ((line = cr.readLine()) != null && b.length() < 500000) {
@@ -2400,7 +2417,7 @@ public final class LauncherActivity extends Activity {
         }
         try {
             /* -b main,system,crash: a native crash's backtrace (DEBUG) is in the crash buffer */
-            Process p = gameLogcat(started, "main,system,crash", "racacit:V", "SDL:V", "AndroidRuntime:E",
+            Process p = gameLogcat(session.started, "main,system,crash", "racacit:V", "SDL:V", "AndroidRuntime:E",
                     "DEBUG:V", "libc:F", "vulkan:V", "Adreno:W", "mali:W").start();
             try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
                 String line;

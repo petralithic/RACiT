@@ -18,6 +18,7 @@ public class RecompActivity extends SDLActivity {
     /** Started by the launcher's Prepare shaders: launch.env holds RACACIT_PREPARE=1. */
     static final String EXTRA_PREPARE = "prepare";
     static final String GAME_LOG_START = ".game-log-start";
+    private String logSessionId;
     private Companion companion;
     private boolean resumed;
     private android.os.Handler prepTick;
@@ -26,12 +27,17 @@ public class RecompActivity extends SDLActivity {
         return new String[] { "c++_shared", "SDL2", "main" };
     }
 
+    @Override protected String[] getArguments() {
+        return new String[] {"--racit-log-session", logSessionId};
+    }
+
     @Override protected void onCreate(Bundle b) {
         /* A singleTask intent can resume the existing game. Only a new
          * Activity starts SDL and gets a new log boundary. */
+        logSessionId = java.util.UUID.randomUUID().toString();
         try {
             java.io.File marker = new java.io.File(getFilesDir(), GAME_LOG_START);
-            Store.writeText(marker, Long.toString(System.currentTimeMillis()));
+            Store.writeText(marker, System.currentTimeMillis() + "\n" + logSessionId);
         } catch (java.io.IOException e) {
             android.util.Log.w("racacit", "Could not record game start time", e);
         }
