@@ -2349,8 +2349,7 @@ public final class LauncherActivity extends Activity {
         List<String> command = new ArrayList<>();
         java.util.Collections.addAll(command, "logcat", "-d", "-b", buffers, "-v", "time");
         if (started > 0) {
-            String since = new java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-                    .format(new Date(started));
+            String since = String.format(Locale.US, "%d.%03d", started / 1000, started % 1000);
             java.util.Collections.addAll(command, "-T", since);
         }
         if (filters.length > 0) {
