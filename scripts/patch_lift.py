@@ -63,6 +63,28 @@ PUZZLE_FUNCS = {
 PUZZLE_DECL = 'extern "C" int racit_skip_puzzle_now(const char* puzzle);\n'
 
 
+def check_puzzle_calls(recomp):
+    """Reject stale generated inputs before their game target builds."""
+    calls = dict.fromkeys(PUZZLE_HOOKS, 0)
+    token = re.compile(
+        r'\bracit_skip_puzzle_now\s*\(\s*"([a-z_]+)"\s*\)|'
+        r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
+    )
+    for path in glob.glob(os.path.join(recomp, 'ppu_recomp_*.cpp')):
+        with open(path, encoding='utf-8') as source:
+            text = source.read()
+        if 'racit_skip_puzzle_now' not in text:
+            continue
+        for match in token.finditer(text):
+            name = match.group(1)
+            if name in calls:
+                calls[name] += 1
+    bad = ['%s (%d)' % (name, count) for name, count in calls.items() if count != 1]
+    if bad:
+        sys.exit('patch_lift: expected one call per puzzle hook in %s: %s. Re-run the lift pipeline.'
+                 % (recomp, ', '.join(bad)))
+
+
 def _func_span(src, name):
     m = re.search(r'void %s\(ppu_context\* ctx\) \{\n' % name, src)
     if not m:
@@ -126,6 +148,15 @@ def check_game_profile(elf, selected='auto', require_buildable=True, quiet=False
         print('Game profile: ' + actual['id'] + ' (SHA-256 ' + actual['elf_sha256'] + ')')
     return actual
 
+
+def apply_full_update_hooks(recomp, elf):
+    from update120_hooks import apply_update120_hooks
+    import subprocess
+    apply_update120_hooks(recomp, elf)
+    apply_puzzle_hooks(recomp, 'BCUS98124-1.20')
+    subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'fix_vmx_alias.py'), recomp], check=True)
+
+
 if len(sys.argv) > 1 and sys.argv[1] == '--check-profile':
     if len(sys.argv) not in (3, 4):
         sys.exit('usage: patch_lift.py --check-profile EBOOT.ELF [PROFILE_ID|auto]')
@@ -140,14 +171,18 @@ if len(sys.argv) > 1 and sys.argv[1] == '--identify-profile':
     print(profile['id'])
     sys.exit(0)
 
+if len(sys.argv) > 1 and sys.argv[1] == '--check-puzzle-hooks':
+    if len(sys.argv) != 3:
+        sys.exit('usage: patch_lift.py --check-puzzle-hooks RECOMP')
+    check_puzzle_calls(sys.argv[2])
+    sys.exit(0)
+
 # Existing callers may still patch the disc lift by directory alone. The
 # pipeline supplies the executable so updates select their own complete recipe.
 if len(sys.argv) > 1 and sys.argv[1] == '--apply-update-hooks':
     if len(sys.argv) != 4:
         sys.exit('usage: patch_lift.py --apply-update-hooks RECOMP EBOOT.ELF')
-    sys.path.insert(0, os.path.join(ROOT, 'scripts'))
-    from update120_hooks import apply_update120_hooks
-    apply_update120_hooks(sys.argv[2], sys.argv[3])
+    apply_full_update_hooks(sys.argv[2], sys.argv[3])
     sys.exit(0)
 
 import argparse
@@ -160,13 +195,7 @@ RECOMP = options.recomp
 if options.elf:
     profile = check_game_profile(options.elf, options.profile, require_buildable=False)
     if profile['id'] == 'BCUS98124-1.20':
-        sys.path.insert(0, os.path.join(ROOT, 'scripts'))
-        from update120_hooks import apply_update120_hooks
-        apply_update120_hooks(RECOMP, options.elf)
-        apply_puzzle_hooks(RECOMP, profile['id'])
-        import subprocess
-        subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'fix_vmx_alias.py'), RECOMP],
-                       check=True)
+        apply_full_update_hooks(RECOMP, options.elf)
         sys.exit(0)
     # A disc 1.00: the USA one here, the European one in scripts/retarget.py's copy.
     if profile['app_version'] != '1.00' or not profile.get('buildable'):

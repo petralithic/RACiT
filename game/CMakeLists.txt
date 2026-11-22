@@ -208,6 +208,19 @@ if(ANDROID)
 else()
     add_executable(${PROJECT_NAME})
 endif()
+
+# Reused generated sources must include the puzzle hook from this branch.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(_puzzle_patcher "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/patch_lift.py")
+set(_puzzle_stamp "${CMAKE_CURRENT_BINARY_DIR}/puzzle-hooks.ok")
+add_custom_command(OUTPUT "${_puzzle_stamp}"
+    COMMAND "${Python3_EXECUTABLE}" -I -X utf8 "${_puzzle_patcher}" --check-puzzle-hooks "${RECOMP_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E touch "${_puzzle_stamp}"
+    DEPENDS "${_puzzle_patcher}" ${RECOMP_SOURCES}
+    VERBATIM)
+add_custom_target(racacit_check_puzzle_hooks DEPENDS "${_puzzle_stamp}")
+add_dependencies(${PROJECT_NAME} racacit_check_puzzle_hooks)
+
 # Discord Rich Presence: the Application ID registered for this port at
 # https://discord.com/developers/applications. Public (every copy uses the
 # same one); with it built in, the status works for every player with no
