@@ -1126,9 +1126,8 @@ public final class LauncherActivity extends Activity {
             ui.post(() -> {
                 busy = false;
                 if (gone()) return;
-                startActivity(new Intent(this, RecompActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                .putExtra(RecompActivity.EXTRA_PREPARE, true),
-                        android.app.ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY).toBundle());
+                startGameActivity(new Intent(this, RecompActivity.class)
+                        .putExtra(RecompActivity.EXTRA_PREPARE, true));
             });
         }).start();
     }
@@ -1152,10 +1151,17 @@ public final class LauncherActivity extends Activity {
                  * a frontend opened this launcher on the second screen, so the
                  * companion gets the other one. Its own task (taskAffinity) lets
                  * it sit on a different screen from the launcher. */
-                startActivity(new Intent(this, RecompActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        android.app.ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY).toBundle());
+                startGameActivity(new Intent(this, RecompActivity.class));
             });
         }).start();
+    }
+
+    private static final String GAME_LOG_START = "game-log-start";
+
+    private void startGameActivity(Intent intent) {
+        getPreferences(MODE_PRIVATE).edit().putLong(GAME_LOG_START, System.currentTimeMillis()).apply();
+        startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY).toBundle());
     }
 
     /* ---- setup guide -------------------------------------------------------- */
@@ -2339,11 +2345,31 @@ public final class LauncherActivity extends Activity {
         focusFirst(col);
     }
 
-    /** log.txt when logging is on, else the game's own lines from logcat (an app may read its own). */
+    private static ProcessBuilder gameLogcat(long started, String buffers, String... filters) {
+        List<String> command = new ArrayList<>();
+        java.util.Collections.addAll(command, "logcat", "-d", "-b", buffers, "-v", "time");
+        if (started > 0) {
+            String since = new java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+                    .format(new Date(started));
+            java.util.Collections.addAll(command, "-T", since);
+        }
+        if (filters.length > 0) {
+            command.add("-s");
+            java.util.Collections.addAll(command, filters);
+        }
+        return new ProcessBuilder(command).redirectErrorStream(true);
+    }
+
+    private static boolean isCurrentGameLog(File log, long started) {
+        return log.isFile() && log.length() > 0 && (started == 0 || log.lastModified() > started);
+    }
+
+    /** Read the current file or logcat when the game exited before opening it. */
     private String readGameLog() {
         StringBuilder b = new StringBuilder();
+        final long started = getPreferences(MODE_PRIVATE).getLong(GAME_LOG_START, 0);
         File lf = store.log();
-        if (store.debugFlag().exists() && lf.exists() && lf.length() > 0) {
+        if (store.debugFlag().exists() && isCurrentGameLog(lf, started)) {
             try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(lf, "r")) {
                 long start = Math.max(0, lf.length() - 600000);
                 r.seek(start);
@@ -2352,11 +2378,11 @@ public final class LauncherActivity extends Activity {
                 /* A native crash's backtrace is not in log.txt: Android's crash buffer
                  * has it. First, dated, so the log's own end stays the last lines. */
                 try {
-                    Process p = new ProcessBuilder("logcat", "-d", "-b", "crash", "-v", "time").redirectErrorStream(true).start();
+                    Process p = gameLogcat(started, "crash").start();
                     try (java.io.BufferedReader cr = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
                         String line; boolean first = true;
                         while ((line = cr.readLine()) != null && b.length() < 500000) {
-                            if (first) { b.append("---- Android's crash buffer (dated; may be earlier runs) ----\n"); first = false; }
+                            if (first) { b.append("---- Android crash buffer ----\n"); first = false; }
                             b.append(line).append('\n');
                         }
                         if (!first) b.append("---- log.txt ----\n");
@@ -2368,8 +2394,8 @@ public final class LauncherActivity extends Activity {
         }
         try {
             /* -b main,system,crash: a native crash's backtrace (DEBUG) is in the crash buffer */
-            Process p = new ProcessBuilder("logcat", "-d", "-b", "main,system,crash", "-v", "time", "-s", "racacit:V", "SDL:V", "AndroidRuntime:E",
-                    "DEBUG:V", "libc:F", "vulkan:V", "Adreno:W", "mali:W").redirectErrorStream(true).start();
+            Process p = gameLogcat(started, "main,system,crash", "racacit:V", "SDL:V", "AndroidRuntime:E",
+                    "DEBUG:V", "libc:F", "vulkan:V", "Adreno:W", "mali:W").start();
             try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
                 String line;
                 while ((line = r.readLine()) != null) {
@@ -2390,7 +2416,7 @@ public final class LauncherActivity extends Activity {
         try { s.append("\nApp: ").append(getPackageManager().getPackageInfo(getPackageName(), 0).versionName); } catch (Exception ignored) { }
         String[] lines = all.split("\n");
         s.append("\nLog lines: ").append(lines.length);
-        if (lines.length < 3) { s.append("\n\nThe log is empty: start the game once, then come back here."); return s.toString(); }
+        if (all.trim().isEmpty()) { s.append("\n\nThe log is empty: start the game once, then come back here."); return s.toString(); }
         java.util.regex.Pattern key = java.util.regex.Pattern.compile(
                 "\\[android\\]|\\[RSX vulkan\\]|vulkan|Vulkan|\\[rsx\\]|error|Error|ERROR|fail|FAIL|fatal|FATAL|abort|signal |"
                 + "DIALOG|Insufficient|not found|missing|exception|Exception|SIGSEGV|SIGABRT|backtrace|performance hints|\\[prof\\]|"

@@ -1701,13 +1701,13 @@ static void android_setup(int* argc, char*** argv)
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_PLAYER_LED, "1");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
-        __android_log_print(ANDROID_LOG_ERROR, "RACiT", "SDL initialization failed: %s", SDL_GetError());
+        __android_log_print(ANDROID_LOG_ERROR, "racacit", "SDL initialization failed: %s", SDL_GetError());
         exit(EXIT_FAILURE);
     }
     const char* base = SDL_AndroidGetExternalStoragePath();
     if (!base || !*base) base = SDL_AndroidGetInternalStoragePath();
     if (!base || !*base) {
-        __android_log_print(ANDROID_LOG_ERROR, "RACiT", "App storage is unavailable");
+        __android_log_print(ANDROID_LOG_ERROR, "racacit", "App storage is unavailable");
         exit(EXIT_FAILURE);
     }
     char path[1100];
@@ -1716,7 +1716,7 @@ static void android_setup(int* argc, char*** argv)
      * free-space query (content_free_kb from "./gamedata/...") then reads 0 KB
      * free there, and a fresh install stops on "Insufficient hard disk space". */
     if (chdir(base) != 0) {
-        __android_log_print(ANDROID_LOG_ERROR, "RACiT", "Cannot enter app storage: %s", base);
+        __android_log_print(ANDROID_LOG_ERROR, "racacit", "Cannot enter app storage: %s", base);
         exit(EXIT_FAILURE);
     }
 
