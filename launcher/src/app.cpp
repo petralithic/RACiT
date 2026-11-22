@@ -16,6 +16,7 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <ctime>
 #include <functional>
@@ -493,6 +494,48 @@ static Item ds_plus_item()
 
 static int s_bind_tab = 0;   // Key bindings: 0 by button, 1 by key
 static void bindings_screen();
+
+static std::string parse_custom_window_size(const std::string& text)
+{
+    const auto x = text.find_first_of("xX");
+    if (x == std::string::npos) return {};
+    const auto width = trim(text.substr(0, x));
+    const auto height = trim(text.substr(x + 1));
+    int w = 0, h = 0;
+    const auto wr = std::from_chars(width.data(), width.data() + width.size(), w);
+    const auto hr = std::from_chars(height.data(), height.data() + height.size(), h);
+    if (wr.ec != std::errc{} || wr.ptr != width.data() + width.size() ||
+        hr.ec != std::errc{} || hr.ptr != height.data() + height.size() ||
+        w < 320 || w > 16384 || h < 200 || h > 16384) return {};
+    return std::to_string(w) + "x" + std::to_string(h);
+}
+
+static Item custom_window_size()
+{
+    Item item;
+    item.kind = K_FIELD;
+    item.label = "Custom window size (width x height)";
+    item.sub = S->settings.get("RACACIT_WINDOW_SIZE");
+    item.commit = [](const std::string& text) {
+        const bool reset = trim(text).empty();
+        const auto value = parse_custom_window_size(text);
+        if (!reset && value.empty()) {
+            message("Invalid window size", "Enter a width from 320 to 16384 and a height from 200 to 16384, such as 3440x1440. Clear the field to restore Default.");
+            return;
+        }
+        auto settings = S->settings;
+        if (reset) settings.remove("RACACIT_WINDOW_SIZE");
+        else settings.put("RACACIT_WINDOW_SIZE", value);
+        if (!settings.save()) {
+            message("Could not save", "The window size could not be saved.");
+            return;
+        }
+        S->settings = std::move(settings);
+        refresh();
+    };
+    return item;
+}
+
 static void add_options(const std::vector<std::string>& sections)
 {
     std::string section;
@@ -534,6 +577,8 @@ static void add_options(const std::vector<std::string>& sections)
         it.change = step;
         it.act = [step] { step(+1); };
         scr.items.push_back(it);
+        if (g_prof == &kRacitProfile && !strcmp(o.key, "RACACIT_WINDOW_SIZE"))
+            scr.items.push_back(custom_window_size());
         if (!strcmp(o.key, "RACACIT_MOUSE_INVERT_Y"))
             scr.items.push_back(button("Key bindings", "Every button on keys and mouse buttons", [] { s_bind_tab = 0; set_screen(bindings_screen); }));
     }
@@ -1328,7 +1373,7 @@ static void activate()
     if (!it.enabled) return;
     if (it.kind == K_FIELD) {
         if (!editing) { editing = true; edit_text = it.sub; }
-        else { editing = false; if (it.commit) it.commit(edit_text); }
+        else { editing = false; if (auto commit = it.commit) commit(edit_text); }
         redraw();
         return;
     }
@@ -1595,7 +1640,7 @@ static void draw_items()
         } else if (i.kind == K_FIELD) {
             g.text(i.label, { tx, r.t + 6, r.r - 18, r.t + 32 }, F_BUTTON, tc);
             const std::string v = editing && f ? edit_text + ((GetTickCount64() / 500) % 2 ? "|" : " ") :
-                                  i.sub.empty() ? (f ? "Enter to type an address" : "Not set") : i.sub;
+                                  i.sub.empty() ? (f ? "Enter to edit" : "Not set") : i.sub;
             g.text(v, { tx, r.t + 34, r.r - 18, r.b - 6 }, F_BUTTON_SUB, editing && f ? col::ORANGE : col::TEXT_DIM);
         } else if (i.sub.empty()) {
             g.text(i.label, { tx, r.t, r.r - 18, r.b }, F_BUTTON, tc);
