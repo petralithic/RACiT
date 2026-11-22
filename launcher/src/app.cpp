@@ -1948,6 +1948,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (const int k = hit_side(x, y); k >= 0) { switch_game(k); return 0; }
         const int i = hit_item(x, y);
         if (i < 0) return 0;
+        if (i != focus) editing = false;
         focus = i;
         Item& it = scr.items[i];
         if (it.kind == K_OPTION && it.change) { change(+1); return 0; }   // a click steps to the next value
