@@ -17,6 +17,7 @@ import org.libsdl.app.SDLActivity;
 public class RecompActivity extends SDLActivity {
     /** Started by the launcher's Prepare shaders: launch.env holds RACACIT_PREPARE=1. */
     static final String EXTRA_PREPARE = "prepare";
+    static final String GAME_LOG_START = ".game-log-start";
     private Companion companion;
     private boolean resumed;
     private android.os.Handler prepTick;
@@ -26,6 +27,14 @@ public class RecompActivity extends SDLActivity {
     }
 
     @Override protected void onCreate(Bundle b) {
+        /* A singleTask intent can resume the existing game. Only a new
+         * Activity starts SDL and gets a new log boundary. */
+        try {
+            java.io.File marker = new java.io.File(getFilesDir(), GAME_LOG_START);
+            Store.writeText(marker, Long.toString(System.currentTimeMillis()));
+        } catch (java.io.IOException e) {
+            android.util.Log.w("racacit", "Could not record game start time", e);
+        }
         super.onCreate(b);
         Store store = new Store(this);
         /* Sustained performance: the clocks the device can hold for an hour,

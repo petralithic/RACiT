@@ -1156,10 +1156,7 @@ public final class LauncherActivity extends Activity {
         }).start();
     }
 
-    private static final String GAME_LOG_START = "game-log-start";
-
     private void startGameActivity(Intent intent) {
-        getPreferences(MODE_PRIVATE).edit().putLong(GAME_LOG_START, System.currentTimeMillis()).apply();
         startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 android.app.ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY).toBundle());
     }
@@ -2363,12 +2360,22 @@ public final class LauncherActivity extends Activity {
         return log.isFile() && log.length() > 0 && (started == 0 || log.lastModified() > started);
     }
 
+    private long latestGameLogStart() {
+        File marker = new File(getFilesDir(), RecompActivity.GAME_LOG_START);
+        try {
+            byte[] contents = java.nio.file.Files.readAllBytes(marker.toPath());
+            return Long.parseLong(new String(contents, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException | NumberFormatException e) {
+            return 0;
+        }
+    }
+
     /** Read the current file or logcat when the game exited before opening it. */
     private String readGameLog() {
         StringBuilder b = new StringBuilder();
-        final long started = getPreferences(MODE_PRIVATE).getLong(GAME_LOG_START, 0);
+        final long started = latestGameLogStart();
         File lf = store.log();
-        if (store.debugFlag().exists() && isCurrentGameLog(lf, started)) {
+        if (isCurrentGameLog(lf, started)) {
             try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(lf, "r")) {
                 long start = Math.max(0, lf.length() - 600000);
                 r.seek(start);
