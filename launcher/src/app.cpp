@@ -285,15 +285,36 @@ static std::vector<std::pair<std::string, std::string>> percent_choices(int step
     return v;
 }
 
+static std::string parse_custom_window_size(const std::string& text)
+{
+    const auto x = text.find_first_of("xX");
+    if (x == std::string::npos) return {};
+    const auto width = trim(text.substr(0, x));
+    const auto height = trim(text.substr(x + 1));
+    int w = 0, h = 0;
+    const auto wr = std::from_chars(width.data(), width.data() + width.size(), w);
+    const auto hr = std::from_chars(height.data(), height.data() + height.size(), h);
+    if (wr.ec != std::errc{} || wr.ptr != width.data() + width.size() ||
+        hr.ec != std::errc{} || hr.ptr != height.data() + height.size() ||
+        w < 320 || w > 16384 || h < 200 || h > 16384) return {};
+    return std::to_string(w) + "x" + std::to_string(h);
+}
+
 static void option_value(const Opt& o, std::string* value, std::string* label, int* index, std::vector<std::pair<std::string, std::string>>* choices)
 {
     *choices = o.ch;
     if (choices->empty()) *choices = percent_choices(!strcmp(o.key, "RACACIT_DS_RUMBLE") ? 10 : 5, !strcmp(o.key, "RACACIT_DS_RUMBLE"));
     *value = S->settings.get(o.key, o.def);
+    const bool window_size = !strcmp(o.key, "RACACIT_WINDOW_SIZE");
+    if (window_size && !value->empty()) {
+        const auto size = parse_custom_window_size(*value);
+        if (!size.empty()) *value = size;
+    }
     *index = -1;
     for (size_t i = 0; i < choices->size(); i++) {
         const std::string& c = (*choices)[i].first;
-        if (c == *value || (!c.empty() && !value->empty() && atof(c.c_str()) == atof(value->c_str()) && isdigit((unsigned char)c.back())))
+        if (c == *value || (!window_size && !c.empty() && !value->empty() &&
+                            atof(c.c_str()) == atof(value->c_str()) && isdigit((unsigned char)c.back())))
             *index = (int)i;
     }
     *label = *index >= 0 ? (*choices)[*index].second : o.ch.empty() ? *value + "%" : *value + " (custom)";
@@ -495,19 +516,26 @@ static Item ds_plus_item()
 static int s_bind_tab = 0;   // Key bindings: 0 by button, 1 by key
 static void bindings_screen();
 
-static std::string parse_custom_window_size(const std::string& text)
+static void save_window_size(const std::string& value)
 {
-    const auto x = text.find_first_of("xX");
-    if (x == std::string::npos) return {};
-    const auto width = trim(text.substr(0, x));
-    const auto height = trim(text.substr(x + 1));
-    int w = 0, h = 0;
-    const auto wr = std::from_chars(width.data(), width.data() + width.size(), w);
-    const auto hr = std::from_chars(height.data(), height.data() + height.size(), h);
-    if (wr.ec != std::errc{} || wr.ptr != width.data() + width.size() ||
-        hr.ec != std::errc{} || hr.ptr != height.data() + height.size() ||
-        w < 320 || w > 16384 || h < 200 || h > 16384) return {};
-    return std::to_string(w) + "x" + std::to_string(h);
+    if (game_proc) {
+        message("Game is running", "Close the game before changing the window size.");
+        return;
+    }
+    SettingsFile settings;
+    settings.path = S->settings.path;
+    if (!settings.load()) {
+        message("Could not read settings", "The current settings file could not be read.");
+        return;
+    }
+    if (value.empty()) settings.remove("RACACIT_WINDOW_SIZE");
+    else settings.put("RACACIT_WINDOW_SIZE", value);
+    if (!settings.save()) {
+        message("Could not save", "The window size could not be saved.");
+        return;
+    }
+    S->settings = std::move(settings);
+    refresh();
 }
 
 static Item custom_window_size()
@@ -523,15 +551,7 @@ static Item custom_window_size()
             message("Invalid window size", "Enter a width from 320 to 16384 and a height from 200 to 16384, such as 3440x1440. Clear the field to restore Default.");
             return;
         }
-        auto settings = S->settings;
-        if (reset) settings.remove("RACACIT_WINDOW_SIZE");
-        else settings.put("RACACIT_WINDOW_SIZE", value);
-        if (!settings.save()) {
-            message("Could not save", "The window size could not be saved.");
-            return;
-        }
-        S->settings = std::move(settings);
-        refresh();
+        save_window_size(value);
     };
     return item;
 }
@@ -556,6 +576,10 @@ static void add_options(const std::vector<std::string>& sections)
             std::string value, label; int idx; std::vector<std::pair<std::string, std::string>> ch;
             option_value(*op, &value, &label, &idx, &ch);
             idx = step_choice(ch, value, idx, d);
+            if (!strcmp(op->key, "RACACIT_WINDOW_SIZE")) {
+                save_window_size(ch[idx].first);
+                return;
+            }
             if (ch[idx].first.empty()) S->settings.remove(op->key); else S->settings.put(op->key, ch[idx].first);
             S->settings.save();
             refresh();
@@ -1933,7 +1957,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (ov.type == Overlay::CONFIRM) { for (int k = 0; k < 2; k++) if (ov.btn[k].in(x, y) && ov.focus != k) { ov.focus = k; redraw(); } return 0; }
         if (ov.type != Overlay::NONE) return 0;
         const int i = hit_item(x, y);
-        if (i >= 0 && i != hover) { hover = i; if (focus != i) { focus = i; editing = false; } redraw(); }
+        if (i >= 0 && i != hover) { hover = i; if (!editing && focus != i) focus = i; redraw(); }
         if (i < 0) hover = -1;
         return 0; }
     case WM_LBUTTONUP: {

@@ -104,9 +104,17 @@ static bool same_key(const std::string& a, const std::string& b) { return lower(
 bool SettingsFile::load()
 {
     lines.clear();
-    std::error_code ec;
-    if (!fs::exists(path, ec)) return false;
-    const std::string t = read_text(path);
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::string t;
+    char chunk[4096];
+    while (input) {
+        input.read(chunk, sizeof chunk);
+        t.append(chunk, (size_t)input.gcount());
+        if (t.size() > (16u << 20)) return false;
+    }
+    if (input.bad() || !input.eof()) return false;
+    if (t.compare(0, 3, "\xEF\xBB\xBF") == 0) t.erase(0, 3);
     size_t i = 0;
     while (i < t.size()) {
         size_t j = t.find('\n', i);
@@ -190,11 +198,14 @@ Store::Store(fs::path r, const GameProfile* p) : root(std::move(r)), prof(p)
     settings.path = data() / L"settings.txt";
     // One launcher.ini for every game: the launcher's own options.
     ini.path = (prof->folder[0] ? root.parent_path() : root) / L"launcher.ini";
-    if (!settings.load()) {
+    if (!settings.load() && !fs::exists(settings.path, ec) && !ec) {
         write_text_atomic(settings.path, std::string("# ") + prof->full_name + " (PC recompilation) -- game settings\r\n" + kSettingsTemplateRest);
         settings.load();
     }
-    if (!ini.load()) { write_text_atomic(ini.path, kIniTemplate); ini.load(); }
+    if (!ini.load() && !fs::exists(ini.path, ec) && !ec) {
+        write_text_atomic(ini.path, kIniTemplate);
+        ini.load();
+    }
 }
 
 void Store::reload() { settings.load(); ini.load(); }
