@@ -28,9 +28,10 @@ fi
 }
 if git -C "$RUNTIME" apply --reverse --check --ignore-whitespace "$PATCH" 2>/dev/null; then
   echo "Runtime patch is already applied."
-else
-  git -C "$RUNTIME" apply --check --ignore-whitespace "$PATCH"
-  git -C "$RUNTIME" apply --ignore-whitespace "$PATCH"
+elif git -C "$RUNTIME" apply --ignore-whitespace "$PATCH"; then
   echo "Runtime patch applied."
+else
+  echo "Runtime patch differs. Run setup in a separate checkout to preserve your existing runtime." >&2
+  exit 1
 fi
 echo "Ready for scripts/pipeline.sh. Dependency and input requirements are in BUILDING.md."

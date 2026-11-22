@@ -67,7 +67,7 @@ def check_puzzle_calls(recomp):
     """Reject stale generated inputs before their game target builds."""
     calls = dict.fromkeys(PUZZLE_HOOKS, 0)
     token = re.compile(
-        r'\bracit_skip_puzzle_now\s*\(\s*"([a-z_]+)"\s*\)|'
+        r'\bracit_skip_puzzle_now\s*\(\s*"([^"\\]*)"\s*\)|'
         r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
     )
     for path in glob.glob(os.path.join(recomp, 'ppu_recomp_*.cpp')):
@@ -77,12 +77,13 @@ def check_puzzle_calls(recomp):
             continue
         for match in token.finditer(text):
             name = match.group(1)
-            if name in calls:
-                calls[name] += 1
+            if name is not None:
+                calls[name] = calls.get(name, 0) + 1
     bad = ['%s (%d)' % (name, count) for name, count in calls.items() if count != 1]
-    if bad:
-        sys.exit('patch_lift: expected one call per puzzle hook in %s: %s. Re-run the lift pipeline.'
-                 % (recomp, ', '.join(bad)))
+    unexpected = ['unexpected %s' % name for name in sorted(calls.keys() - PUZZLE_HOOKS.keys())]
+    if bad or unexpected:
+        sys.exit('patch_lift: incompatible puzzle hooks in %s: %s. Re-run the lift pipeline.'
+                 % (recomp, ', '.join(bad + unexpected)))
 
 
 def _func_span(src, name):

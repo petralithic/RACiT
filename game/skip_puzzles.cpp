@@ -17,6 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 
+extern "C" int rsx_host_ui_capturing(void);
+extern "C" int rsx_host_ui_menu_requested(void);
+
 namespace {
 std::atomic<int> mode{-1};                 /* -1: not read yet */
 std::atomic<uint64_t> request_ms{0};       /* when the skip key last went down (0: none pending) */
@@ -58,12 +61,18 @@ extern "C" void racit_skip_puzzles_set(int m)
     request_ms.store(0);
 }
 
+extern "C" void racit_skip_puzzle_cancel_request(void)
+{
+    request_ms.store(0);
+}
+
 /* Every pad poll (cellPad.c): the skip key, the controller hold (R3 + Down on one pad), and
  * whether the Settings menu is open or opening. A request is the moment the key goes down
  * (holding it asks once), or the moment the hold reaches a second (once per hold). While the
  * menu is open or opening nothing asks and any pending request is dropped, so the inputs that
  * open the menu (L3 + R3, a long Select, F1) can never also skip. */
-extern "C" void racit_skip_puzzle_input_at(unsigned long long now_ms, int key_held, unsigned int combo_ports, int menu_open)
+extern "C" void racit_skip_puzzle_input_at(unsigned long long now_ms, int key_held,
+                                          unsigned int combo_ports, int menu_open, int ports_changed)
 {
     if (!now_ms) now_ms = 1;
     const int before = was_down.exchange(key_held ? 1 : 0);
@@ -78,7 +87,7 @@ extern "C" void racit_skip_puzzle_input_at(unsigned long long now_ms, int key_he
     if (!combo_ports) { combo_since.store(0); combo_fired.store(0); return; }
     if (combo_fired.load()) return;
     uint64_t since = combo_since.load();
-    if (!since || !(combo_owners.fetch_and(combo_ports) & combo_ports)) {
+    if (!since || ports_changed || !(combo_owners.fetch_and(combo_ports) & combo_ports)) {
         combo_owners.store(combo_ports);
         combo_since.store(now_ms);
         return;
@@ -96,6 +105,10 @@ extern "C" int racit_skip_puzzle_now_at(const char* puzzle, unsigned long long n
     if (m == 1) yes = 1;
     else if (m == 2) {
         uint64_t t = request_ms.load();
+        if (t && (rsx_host_ui_capturing() || rsx_host_ui_menu_requested())) {
+            racit_skip_puzzle_cancel_request();
+            return 0;
+        }
         while (t && now_ms >= t && now_ms - t <= kRequestMs) {
             if (request_ms.compare_exchange_weak(t, 0)) { yes = 1; break; }
         }
@@ -111,9 +124,9 @@ static unsigned long long now_ms()
     return (unsigned long long)std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count() + 1;
 }
-extern "C" void racit_skip_puzzle_input(int key_held, unsigned int combo_ports, int menu_open)
+extern "C" void racit_skip_puzzle_poll(int key_held, unsigned int combo_ports, int menu_open, int ports_changed)
 {
-    racit_skip_puzzle_input_at(now_ms(), key_held, combo_ports, menu_open);
+    racit_skip_puzzle_input_at(now_ms(), key_held, combo_ports, menu_open, ports_changed);
 }
 extern "C" int racit_skip_puzzle_now(const char* puzzle)
 {

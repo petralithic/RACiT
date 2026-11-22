@@ -87,7 +87,6 @@ def apply_update120_hooks(recomp, elf):
 
 
 if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == '--apply-update-hooks':
-    if len(sys.argv) != 4:
-        sys.exit('usage: patch_lift.py --apply-update-hooks RECOMP EBOOT.ELF')
-    apply_update120_hooks(sys.argv[2], sys.argv[3])
-    sys.exit(0)
+    import subprocess
+    patcher = os.path.join(ROOT, 'scripts', 'patch_lift.py')
+    sys.exit(subprocess.call([sys.executable, patcher, *sys.argv[1:]]))

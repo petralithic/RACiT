@@ -6,9 +6,15 @@
 extern "C" {
 int racit_skip_puzzles_mode(const char* setting);
 void racit_skip_puzzles_set(int mode);
-void racit_skip_puzzle_input_at(unsigned long long now_ms, int key_held, unsigned int combo_ports, int menu_open);
+void racit_skip_puzzle_input_at(unsigned long long now_ms, int key_held, unsigned int combo_ports,
+                               int menu_open, int ports_changed = 0);
 int racit_skip_puzzle_now_at(const char* puzzle, unsigned long long now_ms);
+void racit_skip_puzzle_cancel_request(void);
 }
+static int menu_capturing;
+static int menu_requested;
+extern "C" int rsx_host_ui_capturing(void) { return menu_capturing; }
+extern "C" int rsx_host_ui_menu_requested(void) { return menu_requested; }
 static int failures;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
@@ -71,8 +77,18 @@ int main()
     CHECK(!racit_skip_puzzle_now_at("p", t + 1110));
     racit_skip_puzzle_input_at(t + 1200, 0, 0, 0);
 
-    /* The Settings menu open or opening: no input asks, and a pending skip is dropped. */
+    /* Unplugging a controller can move another controller into its slot. */
     t = 14000;
+    racit_skip_puzzle_input_at(t, 0, 1, 0);
+    racit_skip_puzzle_input_at(t + 900, 0, 1, 0, 1);
+    racit_skip_puzzle_input_at(t + 1100, 0, 1, 0);
+    CHECK(!racit_skip_puzzle_now_at("p", t + 1110));
+    racit_skip_puzzle_input_at(t + 1900, 0, 1, 0);
+    CHECK(racit_skip_puzzle_now_at("p", t + 1910));
+    racit_skip_puzzle_input_at(t + 2000, 0, 0, 0);
+
+    /* The Settings menu open or opening: no input asks, and a pending skip is dropped. */
+    t = 17000;
     racit_skip_puzzle_input_at(t, 1, 0, 1);                 /* F2 with the menu open */
     CHECK(!racit_skip_puzzle_now_at("p", t + 10));
     racit_skip_puzzle_input_at(t + 20, 0, 0, 1);
@@ -91,7 +107,26 @@ int main()
     racit_skip_puzzle_input_at(t + 2800, 1, 0, 0);          /* menu closes, key still down */
     CHECK(!racit_skip_puzzle_now_at("p", t + 2810));        /* not a press */
     racit_skip_puzzle_input_at(t + 2900, 0, 0, 0);
-    t = 20000;
+
+    /* The render thread can open Settings between a key press and the hook. */
+    t = 21000;
+    racit_skip_puzzle_input_at(t, 1, 0, 0);
+    menu_capturing = 1;
+    CHECK(!racit_skip_puzzle_now_at("p", t + 10));
+    menu_capturing = 0;
+    CHECK(!racit_skip_puzzle_now_at("p", t + 20));
+    racit_skip_puzzle_input_at(t + 30, 0, 0, 0);
+    racit_skip_puzzle_input_at(t + 40, 1, 0, 0);
+    racit_skip_puzzle_cancel_request();
+    CHECK(!racit_skip_puzzle_now_at("p", t + 50));
+    racit_skip_puzzle_input_at(t + 60, 0, 0, 0);
+    racit_skip_puzzle_input_at(t + 70, 1, 0, 0);
+    menu_requested = 1;
+    CHECK(!racit_skip_puzzle_now_at("p", t + 80));
+    menu_requested = 0;
+    racit_skip_puzzle_input_at(t + 90, 0, 0, 0);
+
+    t = 22000;
     /* A press with no puzzle to take it lapses after a second: it does not solve the next one. */
     racit_skip_puzzle_input_at(t + 200, 1, 0, 0); racit_skip_puzzle_input_at(t + 216, 0, 0, 0);
     CHECK(!racit_skip_puzzle_now_at("p", t + 1300));
