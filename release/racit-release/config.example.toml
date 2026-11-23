@@ -1,0 +1,36 @@
+# racit-release config. Copy to ~/.config/racit-release/config.toml (or pass --config /
+# RACIT_RELEASE_CONFIG) and fill in your own paths. Keep it out of the repository: it names
+# your game dumps.
+
+repo = "/path/to/RACiT"                    # a clone with the upstream remote
+work = "/path/to/scratch/racit-release"    # outputs, logs, smoke runs (local, unsynced)
+# tree = "/path/to/RACiT/.worktrees/release-build"   # the builder's own worktree (default)
+# upstream_remote = "origin"               # the repo's remote for HighDrexler/RACiT
+# upstream = "HighDrexler/RACiT"           # where the reference Windows zip comes from
+# fork = "petralithic/RACiT"               # where the draft release goes
+# jobs = 6
+# python = "python3"
+# min_free_gib = 20                        # stop before a heavy step under this much free space
+
+[inputs]
+us100_elf = "/path/to/BCUS98124/EBOOT.ELF"      # decrypted, disc 1.00 (sha256 in versions/profiles.json)
+us120_elf = "/path/to/update120/EBOOT.ELF"      # decrypted, update 1.20 (optional: no -u120 builds without it)
+eu100_elf = "/path/to/BCES00511/EBOOT.ELF"      # decrypted, European disc (optional with --allow-missing-eu)
+libsre = "/path/to/libsre.prx"
+
+[mac]
+lib_prefix = "/path/to/macos14-prefix"          # MACOS_LIB_PREFIX (mac/build_macos_libs.sh)
+
+[win]
+zig = "/opt/homebrew/opt/zig@0.16/bin/zig"      # zig 0.16.x: 0.17 can't build the game
+llvm_bin = "/opt/homebrew/opt/llvm@22/bin"      # llvm-ar, llvm-ranlib, llvm-rc
+
+[smoke]                                          # every key optional; a missing one skips that test
+game = "/path/to/disc"                           # the folder holding PS3_GAME
+installed_100 = "/path/to/hdd0/game/BCUS98124"   # of a profile that has played 1.00
+installed_120 = "/path/to/hdd0-120/game/BCUS98124"
+update = "/path/to/update120"                    # PARAM.SFO and USRDIR
+wine = "/path/to/wine"
+wineprefix = "/path/to/prefix"                   # null display driver keeps runs offscreen
+racit_wine = "/path/to/racit-wine"               # rccit-recomp/rust/racit-wine.rs (1.00 game run)
+racit_wine_scratch = "/path/to/racit-wine-scratch"
