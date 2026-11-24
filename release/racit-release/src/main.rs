@@ -981,6 +981,8 @@ fn run() -> Result<()> {
     c.note(format!("- total {mins} min; {}", if c.shippable { "all checks passed" } else { "NOT shippable as is (see above)" }));
     fs::write(c.out.join("summary.md"), &c.report)?;
     if c.args.upload { upload(&mut c, &commit, &assets)?; fs::write(c.out.join("summary.md"), &c.report)?; }
+    // The built programs are inside the zips now.
+    if !c.args.keep_builds { rm_rf(&c.bin)?; }
     if let Some(r) = std::env::var_os("AGENTQ_RESULT") { let _ = fs::write(r, &c.report); }
     println!("\nsummary: {}", c.out.join("summary.md").display());
     Ok(())
