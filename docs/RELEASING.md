@@ -31,7 +31,7 @@ from that reference zip and are not built here:
 - Xcode command line tools, Homebrew `cmake`, `ninja`, `zig@0.16` (0.17 rejects the game's
   patchable-function-entry flags), `llvm@22` (for `llvm-ar`/`llvm-ranlib`/`llvm-rc`: the repo's
   `.cmd` wrappers only run on Windows), `gh` logged in with write access to the fork.
-- The macOS library prefix built for macOS 14 (`mac/build_macos_libs.sh`).
+- Nothing extra for macOS: the zip targets the macOS of the Mac it is built on (the latest). The first run builds the bundled libraries for that version with `mac/build_macos_libs.sh` into `<work>/macos-libs-<version>` and later runs reuse them (Homebrew's own bottles can need a newer point release than the Mac runs). `[mac] min` or `lib_prefix` override this.
 - For the smoke tests: a decrypted disc folder and HDD installs (see `tests/mac_user_launch.py`),
   Wine with a null-display prefix, and `racit-wine` (rccit-recomp `rust/racit-wine.rs`).
 - Copy `release/racit-release/config.example.toml` to `~/.config/racit-release/config.toml` and

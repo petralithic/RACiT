@@ -86,8 +86,23 @@ struct Inputs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MacCfg {
-    /// MACOS_LIB_PREFIX for mac/package_macos.sh (libraries built for the oldest macOS).
-    lib_prefix: PathBuf,
+    /// Lowest macOS the zip runs on. Default: this Mac's own macOS (releases target the latest).
+    min: Option<String>,
+    /// MACOS_LIB_PREFIX for mac/package_macos.sh: libraries built for `min`. Default: built once by
+    /// mac/build_macos_libs.sh into <work>/macos-libs-<min> and reused (Homebrew's bottles can
+    /// need a newer point release than this Mac runs, e.g. SDL3 at 27.2 on 27.0).
+    lib_prefix: Option<PathBuf>,
+}
+
+/// The lowest macOS the Mac builds target: [mac] min, or this Mac's macOS as MAJOR.0.
+fn mac_min(c: &Ctx) -> Result<String> {
+    if let Some(m) = c.cfg.mac.as_ref().and_then(|m| m.min.clone()) { return Ok(m); }
+    let out = Command::new("sw_vers").arg("-productVersion").output()?;
+    ensure!(out.status.success(), "sw_vers -productVersion failed");
+    let v = String::from_utf8(out.stdout)?;
+    let major = v.trim().split('.').next().unwrap_or("").to_string();
+    ensure!(!major.is_empty() && major.chars().all(|ch| ch.is_ascii_digit()), "unexpected macOS version {v:?}");
+    Ok(format!("{major}.0"))
 }
 
 #[derive(Deserialize)]
@@ -440,6 +455,8 @@ fn pipelines(c: &mut Ctx) -> Result<()> {
     p.current_dir(&tree).env("PY", c.py()).env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
         .env("CMAKE_GENERATOR", "Unix Makefiles");
     if skip_desktop { p.env("SKIP_DESKTOP", "1"); }
+    let min = if c.args.mac { Some(mac_min(c)?) } else { None };
+    if let Some(m) = &min { p.env("MACOSX_DEPLOYMENT_TARGET", m); }
     c.run("pipeline-100", &mut p)?;
     if c.args.mac { put(&tree.join("game/build/RaCACiTRecomp"), &c.bin.join("mac-100/RaCACiTRecomp"))?; }
 
@@ -450,6 +467,7 @@ fn pipelines(c: &mut Ctx) -> Result<()> {
         p.arg(&u120).current_dir(&tree).env("PY", c.py()).env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
             .env("CMAKE_GENERATOR", "Unix Makefiles").env("LIBSRE", tree.join("input/libsre.prx"));
         if skip_desktop { p.env("SKIP_DESKTOP", "1"); }
+        if let Some(m) = &min { p.env("MACOSX_DEPLOYMENT_TARGET", m); }
         c.run("pipeline-120", &mut p)?;
         if c.args.mac {
             put(&tree.join("out/BCUS98124-1.20/build/RaCACiTRecomp"), &c.bin.join("mac-120/RaCACiTRecomp"))?;
@@ -650,13 +668,27 @@ fn zip_names(z: &Path) -> Result<Vec<String>> {
 
 fn package_mac(c: &mut Ctx) -> Result<PathBuf> {
     c.step("macOS zip");
-    let m = c.cfg.mac.as_ref().ok_or_else(|| anyhow!("no [mac] section in the config"))?;
+    let min = mac_min(c)?;
+    let prefix = match c.cfg.mac.as_ref().and_then(|m| m.lib_prefix.clone()) {
+        Some(p) => p,
+        None => {
+            let p = c.cfg.work.join(format!("macos-libs-{min}"));
+            if !p.join("lib/libSDL3.dylib").exists() {
+                c.step(&format!("macOS libraries for macOS {min} (once, kept in {})", p.display()));
+                let mut b = sh("bash", &["mac/build_macos_libs.sh"]);
+                b.arg(&p).current_dir(&c.tree).env("MACOS_MIN", &min);
+                c.run("macos-libs", &mut b)?;
+            }
+            p
+        }
+    };
     let outdir = c.dist.join("mac");
     rm_rf(&outdir)?;
     let mut p = sh("bash", &["mac/package_macos.sh", "--version", &c.args.build.to_string(), "--game"]);
     p.arg(c.bin.join("mac-100/RaCACiTRecomp"));
     if c.cfg.inputs.us120_elf.is_some() { p.arg("--game120").arg(c.bin.join("mac-120/RaCACiTRecomp")); }
-    p.arg("--out").arg(&outdir).current_dir(&c.tree).env("MACOS_LIB_PREFIX", &m.lib_prefix);
+    p.arg("--out").arg(&outdir).current_dir(&c.tree).env("MACOS_MIN", &min).env("MACOS_LIB_PREFIX", &prefix);
+    c.note(format!("- macOS zip targets macOS {min} and later"));
     c.run("package-macos", &mut p)?;
     let name = format!("RACiT-{}-macos.zip", c.ver);
     let z = c.dist.join(&name);

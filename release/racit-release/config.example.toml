@@ -18,8 +18,9 @@ us120_elf = "/path/to/update120/EBOOT.ELF"      # decrypted, update 1.20 (option
 eu100_elf = "/path/to/BCES00511/EBOOT.ELF"      # decrypted, European disc (optional with --allow-missing-eu)
 libsre = "/path/to/libsre.prx"
 
-[mac]
-lib_prefix = "/path/to/macos14-prefix"          # MACOS_LIB_PREFIX (mac/build_macos_libs.sh)
+[mac]                                            # every key optional
+# min = "27.0"                                   # lowest macOS; default: this Mac's (latest)
+# lib_prefix = "/path/to/prefix"                 # MACOS_LIB_PREFIX; default: built once in <work>/macos-libs-<min>
 
 [win]
 zig = "/opt/homebrew/opt/zig@0.16/bin/zig"      # zig 0.16.x: 0.17 can't build the game
