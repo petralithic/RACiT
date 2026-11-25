@@ -136,6 +136,8 @@ struct SmokeCfg {
 
 struct Args {
     tag: String,
+    /// --ref: build this commit instead of the tag (a preflight; never uploaded).
+    git_ref: Option<String>,
     build: u32,
     config: PathBuf,
     mac: bool,
@@ -150,7 +152,7 @@ struct Args {
     no_queue_check: bool,
 }
 
-const USAGE: &str = "usage: racit-release --tag vX.Y.Z --build N [--config FILE] [--only mac|win]
+const USAGE: &str = "usage: racit-release --tag vX.Y.Z --build N [--ref COMMIT] [--config FILE] [--only mac|win]
        [--carry-from TAG|ZIP] [--build-notes FILE] [--release-notes FILE] [--allow-missing-eu]
        [--no-smoke] [--no-upload] [--keep-builds] [--no-queue-check]
 Run it inside the job queue: agentq run --label rccit-rel-build --mem 10 -- racit-release ...";
@@ -158,7 +160,7 @@ Run it inside the job queue: agentq run --label rccit-rel-build --mem 10 -- raci
 fn parse_args() -> Result<Args> {
     let home = PathBuf::from(std::env::var("HOME")?);
     let mut a = Args {
-        tag: String::new(), build: 0, config: home.join(".config/racit-release/config.toml"),
+        tag: String::new(), git_ref: None, build: 0, config: home.join(".config/racit-release/config.toml"),
         mac: true, win: true, carry_from: None, build_notes: None, release_notes: None,
         allow_missing_eu: false, smoke: true, upload: true, keep_builds: false, no_queue_check: false,
     };
@@ -168,6 +170,7 @@ fn parse_args() -> Result<Args> {
         let mut val = || it.next().ok_or_else(|| anyhow!("{k} needs a value\n{USAGE}"));
         match k.as_str() {
             "--tag" => a.tag = val()?,
+            "--ref" => a.git_ref = Some(val()?),
             "--build" => a.build = val()?.parse().context("--build N: a number")?,
             "--config" => a.config = val()?.into(),
             "--only" => match val()?.as_str() {
@@ -188,6 +191,7 @@ fn parse_args() -> Result<Args> {
         }
     }
     ensure!(a.tag.starts_with('v') && a.tag.len() > 1, "--tag vX.Y.Z is needed\n{USAGE}");
+    if a.git_ref.is_some() { a.upload = false; }
     ensure!(a.build > 0, "--build N (the game build number, builds\\vN) is needed\n{USAGE}");
     Ok(a)
 }
@@ -329,8 +333,9 @@ fn prepare_tree(c: &mut Ctx) -> Result<String> {
     let git = |args: &[&str]| { let mut g = sh("git", &["-C"]); g.arg(&repo).args(args); g };
     // The tag as upstream has it (a moved local tag must not win).
     let _ = out(&mut git(&["fetch", "-q", &c.cfg.upstream_remote, "--tags"]));
-    let commit = out(&mut git(&["rev-parse", &format!("{}^{{commit}}", c.args.tag)]))
-        .with_context(|| format!("no tag {} in {}", c.args.tag, repo.display()))?;
+    let source = c.args.git_ref.clone().unwrap_or_else(|| c.args.tag.clone());
+    let commit = out(&mut git(&["rev-parse", &format!("{source}^{{commit}}")]))
+        .with_context(|| format!("no tag or commit {source} in {}", repo.display()))?;
     let tree = c.tree.clone();
     if !tree.join(".git").exists() {
         out(git(&["worktree", "add", "-q", "--detach"]).arg(&tree).arg(&commit))?;
@@ -339,7 +344,7 @@ fn prepare_tree(c: &mut Ctx) -> Result<String> {
         ensure!(dirty.is_empty(), "the build tree {} has edits; it belongs to the builder:\n{dirty}", tree.display());
         out(sh("git", &["-C"]).arg(&tree).args(["checkout", "-q", "--detach", &commit]))?;
     }
-    c.note(format!("- source: {} at {}", c.args.tag, &commit[..12]));
+    c.note(format!("- source: {source} at {}", &commit[..12]));
 
     // Launcher version must be the tag's: the updater compares them.
     let app = fs::read_to_string(tree.join("launcher/src/app.cpp"))?;
@@ -489,7 +494,12 @@ struct WinTarget {
 }
 
 fn hook_check(c: &mut Ctx, root: &Path, recomp: &Path, profile: &str, log: &str) -> Result<()> {
-    let mut chk = sh(&c.cfg.python, &["-I", "-X", "utf8", "scripts/check_lift_hooks.py"]);
+    // Trees from before the Rust lift tools have the Python checker; later ones have check-lift-hooks.
+    let mut chk = if root.join("scripts/check_lift_hooks.py").is_file() {
+        sh(&c.cfg.python, &["-I", "-X", "utf8", "scripts/check_lift_hooks.py"])
+    } else {
+        sh("cargo", &["run", "-q", "--release", "--manifest-path", "rust/racit-lift/Cargo.toml", "--bin", "check-lift-hooks", "--"])
+    };
     chk.arg(recomp).args(["--profile", profile]).current_dir(root);
     c.run(log, &mut chk)?;
     let msg = fs::read_to_string(c.logs.join(format!("{log}.log"))).unwrap_or_default();
@@ -974,7 +984,11 @@ fn run() -> Result<()> {
     ensure!(!args.mac || cfg!(target_os = "macos"), "the macOS zip needs a Mac (use --only win elsewhere)");
     let tree = cfg.tree.clone().unwrap_or_else(|| cfg.repo.join(".worktrees/release-build"));
     let ver = args.tag[1..].to_string();
-    let out_dir = cfg.work.join(&args.tag);
+    // A --ref preflight gets its own folder, so it never replaces a release's zips.
+    let out_dir = match &args.git_ref {
+        Some(r) => cfg.work.join(format!("{}-ref-{}", args.tag, r.replace('/', "-"))),
+        None => cfg.work.join(&args.tag),
+    };
     let mut c = Ctx {
         logs: out_dir.join("logs"), bin: out_dir.join("bin"), dist: out_dir.join("dist"), out: out_dir,
         cfg, args, ver, tree, report: String::new(), shippable: true, started: Instant::now(),
