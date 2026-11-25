@@ -372,8 +372,16 @@ fn prepare_tree(c: &mut Ctx) -> Result<String> {
         put(&i.libsre, &tree.join("input/BCES00511/libsre.prx"))?;
     }
 
-    // Runtime at its pin with this tag's patch.
-    c.run("setup-macos", sh("bash", &["mac/setup_macos.sh"]).current_dir(&tree))?;
+    // Runtime at its pin with this tag's patch. The builder owns this checkout, so when the
+    // tree pins another runtime commit (1.0.x on 5244db92, 1.1 on v0.19) setup moves it.
+    let setup = fs::read_to_string(tree.join("mac/setup_macos.sh"))?;
+    let pin = setup.lines().find_map(|l| l.strip_prefix("COMMIT=")).map(str::trim);
+    let head = Command::new("git").args(["-C", "tools/ps3recomp", "rev-parse", "HEAD"])
+        .current_dir(&tree).output().ok().filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let moved = matches!((pin, head.as_deref()), (Some(p), Some(h)) if p != h);
+    let setup_args: &[&str] = if moved { &["mac/setup_macos.sh", "--reset"] } else { &["mac/setup_macos.sh"] };
+    c.run("setup-macos", sh("bash", setup_args).current_dir(&tree))?;
     if c.args.win { windows_tools(c)?; }
     Ok(commit)
 }
