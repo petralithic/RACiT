@@ -915,12 +915,15 @@ fn smoke_windows(c: &mut Ctx, z: &Path) -> Result<()> {
                 c.note(format!("- Windows 1.00 game run (Wine): SKIPPED ({why})"));
                 c.shippable = false;
             } else {
-                // Rosetta has no AVX2: only the compat program runs under Wine on a Mac.
-                let exe = rel.join(format!("builds/v{}/RaCACiT_compat.exe", c.args.build));
-                let name = format!("relsmoke-{}", c.ver);
+                // Rosetta has no AVX2: only the compat programs run under Wine on a Mac.
+                for (label, dir, u120) in [("1.00", format!("v{}", c.args.build), false), ("1.20", format!("v{}-u120", c.args.build), true)] {
+                let exe = rel.join(format!("builds/{dir}/RaCACiT_compat.exe"));
+                if u120 && !exe.is_file() { c.note("- Windows 1.20 game run (Wine): NOT RUN (no 1.20 build in the zip)"); continue; }
+                let name = format!("relsmoke-{}-{}", c.ver, if u120 { "120" } else { "100" });
                 let mut t = Command::new(rw);
                 t.arg(&exe).arg(scr).arg(&name).args(["--watch", "120"]).env("SDL_AUDIODRIVER", "dummy");
-                let log = c.logs.join("smoke-win-game.log");
+                if u120 { t.arg("--update120"); }
+                let log = c.logs.join(format!("smoke-win-game-{}.log", if u120 { "120" } else { "100" }));
                 let f = fs::File::create(&log)?;
                 let st = t.stdin(Stdio::null()).stdout(f.try_clone()?).stderr(f).status()?;
                 let summary = fs::read_to_string(&log).unwrap_or_default();
@@ -928,14 +931,15 @@ fn smoke_windows(c: &mut Ctx, z: &Path) -> Result<()> {
                 let fails: Vec<&str> = summary.lines().filter(|l| l.contains(" FAIL") || l.contains("INVALID")).collect();
                 let passes = summary.lines().filter(|l| l.contains(" PASS ")).count();
                 let ok = st.success() && fails.is_empty() && passes >= 2;
-                c.note(format!("- Windows 1.00 RaCACiT_compat.exe under Wine (racit-wine --watch 120, offscreen, muted): {} ({passes} checks passed{})",
+                c.note(format!("- Windows {label} RaCACiT_compat.exe under Wine (racit-wine --watch 120, offscreen, muted): {} ({passes} checks passed{})",
                     if ok { "PASS" } else { "FAIL" }, if fails.is_empty() { String::new() } else { format!("; {}", fails.join(" | ")) }));
                 if !ok { c.shippable = false; }
+                }
             }
         }
         _ => c.note("- Windows game run: NOT RUN (no [smoke] racit_wine)"),
     }
-    c.note("- Windows AVX2 programs, 1.20 and EU programs: not run here (Rosetta has no AVX2; racit-wine runs 1.00 only). Test on Windows before publishing.");
+    c.note("- Windows AVX2 and EU programs: not run here (Rosetta has no AVX2, and there is no EU disc here). Test on Windows before publishing.");
     rm_rf(&d)?;
     Ok(())
 }
