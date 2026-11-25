@@ -1046,7 +1046,28 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+#[repr(C)]
+struct Rlimit { cur: u64, max: u64 }
+unsafe extern "C" {
+    fn getrlimit(resource: i32, rlp: *mut Rlimit) -> i32;
+    fn setrlimit(resource: i32, rlp: *const Rlimit) -> i32;
+}
+
+/// Jobs the queue daemon starts get launchd's soft limit of 256 open files, and the Windows
+/// game link opens every one of its ~600 objects at once (lld: ProcessFdQuotaExceeded). Raise
+/// the soft limit for the builder and everything it runs.
+fn raise_open_files() {
+    const RLIMIT_NOFILE: i32 = 8;
+    let mut r = Rlimit { cur: 0, max: 0 };
+    if unsafe { getrlimit(RLIMIT_NOFILE, &mut r) } != 0 { return; }
+    for want in [65536u64, 10240] {
+        let n = Rlimit { cur: want.min(r.max), max: r.max };
+        if n.cur <= r.cur || unsafe { setrlimit(RLIMIT_NOFILE, &n) } == 0 { return; }
+    }
+}
+
 fn main() {
+    raise_open_files();
     if let Err(e) = run() {
         eprintln!("racit-release: {e:#}");
         std::process::exit(1);
