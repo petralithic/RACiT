@@ -174,6 +174,10 @@ if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
 elif [ -d "$ROOT/tools/sdl2" ]; then
   CMAKE_ARGS+=(-DCMAKE_PREFIX_PATH="$ROOT/tools/sdl2")
 fi
+# A compiler cache such as sccache, if the environment names one: CMake reads these
+# variables only when a build folder is first configured, so pass them every time.
+[ -n "${CMAKE_C_COMPILER_LAUNCHER:-}" ] && CMAKE_ARGS+=(-DCMAKE_C_COMPILER_LAUNCHER="$CMAKE_C_COMPILER_LAUNCHER")
+[ -n "${CMAKE_CXX_COMPILER_LAUNCHER:-}" ] && CMAKE_ARGS+=(-DCMAKE_CXX_COMPILER_LAUNCHER="$CMAKE_CXX_COMPILER_LAUNCHER")
 cmake -S "$ROOT/game" -B "$BUILD" -G "${CMAKE_GENERATOR:-Ninja}" -DCMAKE_BUILD_TYPE=Release "${CMAKE_ARGS[@]}"
 if [ -n "$JOBS" ]; then
   cmake --build "$BUILD" --parallel "$JOBS"
