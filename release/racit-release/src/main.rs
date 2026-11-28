@@ -63,12 +63,24 @@ struct Config {
     #[serde(default)]
     smoke: SmokeCfg,
 }
-fn d_upstream_remote() -> String { "origin".into() }
-fn d_upstream() -> String { "HighDrexler/RACiT".into() }
-fn d_fork() -> String { "petralithic/RACiT".into() }
-fn d_jobs() -> u32 { 6 }
-fn d_python() -> String { "python3".into() }
-fn d_min_free() -> u64 { 20 }
+fn d_upstream_remote() -> String {
+    "origin".into()
+}
+fn d_upstream() -> String {
+    "HighDrexler/RACiT".into()
+}
+fn d_fork() -> String {
+    "petralithic/RACiT".into()
+}
+fn d_jobs() -> u32 {
+    6
+}
+fn d_python() -> String {
+    "python3".into()
+}
+fn d_min_free() -> u64 {
+    20
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,12 +108,17 @@ struct MacCfg {
 
 /// The lowest macOS the Mac builds target: [mac] min, or this Mac's macOS as MAJOR.0.
 fn mac_min(c: &Ctx) -> Result<String> {
-    if let Some(m) = c.cfg.mac.as_ref().and_then(|m| m.min.clone()) { return Ok(m); }
+    if let Some(m) = c.cfg.mac.as_ref().and_then(|m| m.min.clone()) {
+        return Ok(m);
+    }
     let out = Command::new("sw_vers").arg("-productVersion").output()?;
     ensure!(out.status.success(), "sw_vers -productVersion failed");
     let v = String::from_utf8(out.stdout)?;
     let major = v.trim().split('.').next().unwrap_or("").to_string();
-    ensure!(!major.is_empty() && major.chars().all(|ch| ch.is_ascii_digit()), "unexpected macOS version {v:?}");
+    ensure!(
+        !major.is_empty() && major.chars().all(|ch| ch.is_ascii_digit()),
+        "unexpected macOS version {v:?}"
+    );
     Ok(format!("{major}.0"))
 }
 
@@ -152,7 +169,8 @@ struct Args {
     no_queue_check: bool,
 }
 
-const USAGE: &str = "usage: racit-release --tag vX.Y.Z --build N [--ref COMMIT] [--config FILE] [--only mac|win]
+const USAGE: &str =
+    "usage: racit-release --tag vX.Y.Z --build N [--ref COMMIT] [--config FILE] [--only mac|win]
        [--carry-from TAG|ZIP] [--build-notes FILE] [--release-notes FILE] [--allow-missing-eu]
        [--no-smoke] [--no-upload] [--keep-builds] [--no-queue-check]
 Run it inside the job queue: agentq run --label rccit-rel-build --mem 10 -- racit-release ...";
@@ -160,14 +178,30 @@ Run it inside the job queue: agentq run --label rccit-rel-build --mem 10 -- raci
 fn parse_args() -> Result<Args> {
     let home = PathBuf::from(std::env::var("HOME")?);
     let mut a = Args {
-        tag: String::new(), git_ref: None, build: 0, config: home.join(".config/racit-release/config.toml"),
-        mac: true, win: true, carry_from: None, build_notes: None, release_notes: None,
-        allow_missing_eu: false, smoke: true, upload: true, keep_builds: false, no_queue_check: false,
+        tag: String::new(),
+        git_ref: None,
+        build: 0,
+        config: home.join(".config/racit-release/config.toml"),
+        mac: true,
+        win: true,
+        carry_from: None,
+        build_notes: None,
+        release_notes: None,
+        allow_missing_eu: false,
+        smoke: true,
+        upload: true,
+        keep_builds: false,
+        no_queue_check: false,
     };
-    if let Ok(c) = std::env::var("RACIT_RELEASE_CONFIG") { a.config = c.into(); }
+    if let Ok(c) = std::env::var("RACIT_RELEASE_CONFIG") {
+        a.config = c.into();
+    }
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
-        let mut val = || it.next().ok_or_else(|| anyhow!("{k} needs a value\n{USAGE}"));
+        let mut val = || {
+            it.next()
+                .ok_or_else(|| anyhow!("{k} needs a value\n{USAGE}"))
+        };
         match k.as_str() {
             "--tag" => a.tag = val()?,
             "--ref" => a.git_ref = Some(val()?),
@@ -186,13 +220,24 @@ fn parse_args() -> Result<Args> {
             "--no-upload" => a.upload = false,
             "--keep-builds" => a.keep_builds = true,
             "--no-queue-check" => a.no_queue_check = true,
-            "-h" | "--help" => { println!("{USAGE}"); std::process::exit(0) }
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                std::process::exit(0)
+            }
             o => bail!("unknown argument {o}\n{USAGE}"),
         }
     }
-    ensure!(a.tag.starts_with('v') && a.tag.len() > 1, "--tag vX.Y.Z is needed\n{USAGE}");
-    if a.git_ref.is_some() { a.upload = false; }
-    ensure!(a.build > 0, "--build N (the game build number, builds\\vN) is needed\n{USAGE}");
+    ensure!(
+        a.tag.starts_with('v') && a.tag.len() > 1,
+        "--tag vX.Y.Z is needed\n{USAGE}"
+    );
+    if a.git_ref.is_some() {
+        a.upload = false;
+    }
+    ensure!(
+        a.build > 0,
+        "--build N (the game build number, builds\\vN) is needed\n{USAGE}"
+    );
     Ok(a)
 }
 
@@ -229,13 +274,19 @@ impl Ctx {
         let f = fs::File::create(&path)?;
         let desc = format!("{cmd:?}");
         let t = Instant::now();
-        let st = cmd.stdin(Stdio::null()).stdout(f.try_clone()?).stderr(f).status()
+        let st = cmd
+            .stdin(Stdio::null())
+            .stdout(f.try_clone()?)
+            .stderr(f)
+            .status()
             .with_context(|| format!("starting {desc}"))?;
         if !st.success() {
             let tail = fs::read_to_string(&path).unwrap_or_default();
             let tail: Vec<&str> = tail.lines().rev().take(25).collect();
             eprintln!("--- last lines of {}:", path.display());
-            for l in tail.iter().rev() { eprintln!("{l}"); }
+            for l in tail.iter().rev() {
+                eprintln!("{l}");
+            }
             bail!("{log} failed ({st}); full log {}", path.display());
         }
         println!("   {log}: ok in {} s", t.elapsed().as_secs());
@@ -244,17 +295,26 @@ impl Ctx {
     fn free_gib(&self) -> Result<u64> {
         let o = Command::new("df").arg("-k").arg(&self.cfg.work).output()?;
         let s = String::from_utf8_lossy(&o.stdout);
-        let kib: u64 = s.lines().nth(1).and_then(|l| l.split_whitespace().nth(3)).and_then(|v| v.parse().ok())
+        let kib: u64 = s
+            .lines()
+            .nth(1)
+            .and_then(|l| l.split_whitespace().nth(3))
+            .and_then(|v| v.parse().ok())
             .ok_or_else(|| anyhow!("df: unreadable output"))?;
         Ok(kib / 1024 / 1024)
     }
     fn need_space(&self, what: &str) -> Result<()> {
         let free = self.free_gib()?;
-        ensure!(free >= self.cfg.min_free_gib,
-            "{what}: only {free} GiB free on the work volume (floor {} GiB, min_free_gib)", self.cfg.min_free_gib);
+        ensure!(
+            free >= self.cfg.min_free_gib,
+            "{what}: only {free} GiB free on the work volume (floor {} GiB, min_free_gib)",
+            self.cfg.min_free_gib
+        );
         Ok(())
     }
-    fn py(&self) -> String { format!("{} -I", self.cfg.python) }
+    fn py(&self) -> String {
+        format!("{} -I", self.cfg.python)
+    }
 }
 
 fn sh(cmd: &str, args: &[&str]) -> Command {
@@ -266,8 +326,15 @@ fn sh(cmd: &str, args: &[&str]) -> Command {
 /// stdout of a command that must succeed.
 fn out<C: std::borrow::BorrowMut<Command>>(mut cmd: C) -> Result<String> {
     let cmd = cmd.borrow_mut();
-    let o = cmd.stdin(Stdio::null()).output().with_context(|| format!("starting {cmd:?}"))?;
-    ensure!(o.status.success(), "{cmd:?} failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+    let o = cmd
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("starting {cmd:?}"))?;
+    ensure!(
+        o.status.success(),
+        "{cmd:?} failed: {}",
+        String::from_utf8_lossy(&o.stderr).trim()
+    );
     Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
@@ -277,7 +344,9 @@ fn sha256(path: &Path) -> Result<String> {
     let mut buf = vec![0u8; 1 << 20];
     loop {
         let n = f.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         h.update(&buf[..n]);
     }
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
@@ -285,7 +354,9 @@ fn sha256(path: &Path) -> Result<String> {
 
 /// Copies a file (an APFS clone on macOS), replacing what is there.
 fn put(from: &Path, to: &Path) -> Result<()> {
-    if let Some(p) = to.parent() { fs::create_dir_all(p)?; }
+    if let Some(p) = to.parent() {
+        fs::create_dir_all(p)?;
+    }
     let _ = fs::remove_file(to);
     fs::copy(from, to).with_context(|| format!("copy {} -> {}", from.display(), to.display()))?;
     Ok(())
@@ -293,7 +364,11 @@ fn put(from: &Path, to: &Path) -> Result<()> {
 
 fn rm_rf(p: &Path) -> Result<()> {
     if p.symlink_metadata().is_ok() {
-        if p.is_dir() { fs::remove_dir_all(p)?; } else { fs::remove_file(p)?; }
+        if p.is_dir() {
+            fs::remove_dir_all(p)?;
+        } else {
+            fs::remove_file(p)?;
+        }
     }
     Ok(())
 }
@@ -301,10 +376,19 @@ fn rm_rf(p: &Path) -> Result<()> {
 fn owner_busy() -> Option<String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let av = Path::new(&home).join(".local/bin/av-busy");
-    if av.exists() && Command::new(&av).arg("--quiet").status().map(|s| s.success()).unwrap_or(false) {
+    if av.exists()
+        && Command::new(&av)
+            .arg("--quiet")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    {
         return Some("the owner is on a call (av-busy)".into());
     }
-    let o = Command::new("pgrep").args(["-xl", "racit-player|RaCACiTRecomp|play-racit"]).output().ok()?;
+    let o = Command::new("pgrep")
+        .args(["-xl", "racit-player|RaCACiTRecomp|play-racit"])
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
     (!s.is_empty()).then(|| format!("a game is running ({s})"))
 }
@@ -315,7 +399,9 @@ fn walk(dir: &Path, base: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     for e in entries {
         let p = e.path();
         files.push(p.strip_prefix(base)?.to_path_buf());
-        if e.file_type()?.is_dir() { walk(&p, base, files)?; }
+        if e.file_type()?.is_dir() {
+            walk(&p, base, files)?;
+        }
     }
     Ok(())
 }
@@ -323,14 +409,23 @@ fn walk(dir: &Path, base: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 // ---------------------------------------------------------------- tree ------
 
 #[derive(Deserialize)]
-struct Profiles { profiles: Vec<Profile> }
+struct Profiles {
+    profiles: Vec<Profile>,
+}
 #[derive(Deserialize)]
-struct Profile { id: String, elf_sha256: String }
+struct Profile {
+    id: String,
+    elf_sha256: String,
+}
 
 fn prepare_tree(c: &mut Ctx) -> Result<String> {
     c.step("build tree");
     let repo = c.cfg.repo.clone();
-    let git = |args: &[&str]| { let mut g = sh("git", &["-C"]); g.arg(&repo).args(args); g };
+    let git = |args: &[&str]| {
+        let mut g = sh("git", &["-C"]);
+        g.arg(&repo).args(args);
+        g
+    };
     // The tag as upstream has it (a moved local tag must not win).
     let _ = out(&mut git(&["fetch", "-q", &c.cfg.upstream_remote, "--tags"]));
     let source = c.args.git_ref.clone().unwrap_or_else(|| c.args.tag.clone());
@@ -338,33 +433,69 @@ fn prepare_tree(c: &mut Ctx) -> Result<String> {
         .with_context(|| format!("no tag or commit {source} in {}", repo.display()))?;
     let tree = c.tree.clone();
     if !tree.join(".git").exists() {
-        out(git(&["worktree", "add", "-q", "--detach"]).arg(&tree).arg(&commit))?;
+        out(git(&["worktree", "add", "-q", "--detach"])
+            .arg(&tree)
+            .arg(&commit))?;
     } else {
-        let dirty = out(sh("git", &["-C"]).arg(&tree).args(["status", "--porcelain", "--untracked-files=no"]))?;
-        ensure!(dirty.is_empty(), "the build tree {} has edits; it belongs to the builder:\n{dirty}", tree.display());
-        out(sh("git", &["-C"]).arg(&tree).args(["checkout", "-q", "--detach", &commit]))?;
+        let dirty = out(sh("git", &["-C"]).arg(&tree).args([
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ]))?;
+        ensure!(
+            dirty.is_empty(),
+            "the build tree {} has edits; it belongs to the builder:\n{dirty}",
+            tree.display()
+        );
+        out(sh("git", &["-C"])
+            .arg(&tree)
+            .args(["checkout", "-q", "--detach", &commit]))?;
     }
     c.note(format!("- source: {source} at {}", &commit[..12]));
 
     // Launcher version must be the tag's: the updater compares them.
     let app = fs::read_to_string(tree.join("launcher/src/app.cpp"))?;
-    let lver = app.lines().find_map(|l| l.strip_prefix("static const char* kLauncherVersion = \"")
-        .and_then(|r| r.strip_suffix("\";"))).ok_or_else(|| anyhow!("no kLauncherVersion in launcher/src/app.cpp"))?;
-    ensure!(lver == c.ver, "launcher/src/app.cpp says {lver}, the tag says {}", c.ver);
+    let lver = app
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("static const char* kLauncherVersion = \"")
+                .and_then(|r| r.strip_suffix("\";"))
+        })
+        .ok_or_else(|| anyhow!("no kLauncherVersion in launcher/src/app.cpp"))?;
+    ensure!(
+        lver == c.ver,
+        "launcher/src/app.cpp says {lver}, the tag says {}",
+        c.ver
+    );
 
     // Inputs, checked against the tag's profiles (a wrong dump stops here, not an hour in).
-    let profiles: Profiles = serde_json::from_str(&fs::read_to_string(tree.join("versions/profiles.json"))?)?;
-    let want = |id: &str| profiles.profiles.iter().find(|p| p.id == id).map(|p| p.elf_sha256.clone());
+    let profiles: Profiles =
+        serde_json::from_str(&fs::read_to_string(tree.join("versions/profiles.json"))?)?;
+    let want = |id: &str| {
+        profiles
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.elf_sha256.clone())
+    };
     let check = |id: &str, p: &Path| -> Result<()> {
         let got = sha256(p)?;
         let exp = want(id).ok_or_else(|| anyhow!("versions/profiles.json has no {id}"))?;
-        ensure!(got == exp, "{} is not {id} (sha256 {got}, expected {exp})", p.display());
+        ensure!(
+            got == exp,
+            "{} is not {id} (sha256 {got}, expected {exp})",
+            p.display()
+        );
         Ok(())
     };
     let i = &c.cfg.inputs;
     check("BCUS98124-1.00", &i.us100_elf)?;
-    if let Some(p) = &i.us120_elf { check("BCUS98124-1.20", p)?; }
-    if let Some(p) = &i.eu100_elf { check("BCES00511-1.00", p)?; }
+    if let Some(p) = &i.us120_elf {
+        check("BCUS98124-1.20", p)?;
+    }
+    if let Some(p) = &i.eu100_elf {
+        check("BCES00511-1.00", p)?;
+    }
     put(&i.us100_elf, &tree.join("input/EBOOT.ELF"))?;
     put(&i.libsre, &tree.join("input/libsre.prx"))?;
     if let Some(p) = &i.eu100_elf {
@@ -375,14 +506,27 @@ fn prepare_tree(c: &mut Ctx) -> Result<String> {
     // Runtime at its pin with this tag's patch. The builder owns this checkout, so when the
     // tree pins another runtime commit (1.0.x on 5244db92, 1.1 on v0.19) setup moves it.
     let setup = fs::read_to_string(tree.join("mac/setup_macos.sh"))?;
-    let pin = setup.lines().find_map(|l| l.strip_prefix("COMMIT=")).map(str::trim);
-    let head = Command::new("git").args(["-C", "tools/ps3recomp", "rev-parse", "HEAD"])
-        .current_dir(&tree).output().ok().filter(|o| o.status.success())
+    let pin = setup
+        .lines()
+        .find_map(|l| l.strip_prefix("COMMIT="))
+        .map(str::trim);
+    let head = Command::new("git")
+        .args(["-C", "tools/ps3recomp", "rev-parse", "HEAD"])
+        .current_dir(&tree)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     let moved = matches!((pin, head.as_deref()), (Some(p), Some(h)) if p != h);
-    let setup_args: &[&str] = if moved { &["mac/setup_macos.sh", "--reset"] } else { &["mac/setup_macos.sh"] };
+    let setup_args: &[&str] = if moved {
+        &["mac/setup_macos.sh", "--reset"]
+    } else {
+        &["mac/setup_macos.sh"]
+    };
     c.run("setup-macos", sh("bash", setup_args).current_dir(&tree))?;
-    if c.args.win { windows_tools(c)?; }
+    if c.args.win {
+        windows_tools(c)?;
+    }
     Ok(commit)
 }
 
@@ -394,21 +538,55 @@ fn windows_tools(c: &mut Ctx) -> Result<()> {
     let mut sdl_changed = false;
     for l in script.lines() {
         let w: Vec<&str> = l.split_whitespace().collect();
-        if w.len() != 4 || w[0] != "pin" || w[1] == "ps3recomp" { continue; }
+        if w.len() != 4 || w[0] != "pin" || w[1] == "ps3recomp" {
+            continue;
+        }
         let (dir, repo, rev) = (w[1], w[2], w[3].trim_matches('"'));
         let d = tree.join("tools").join(dir);
         let stamp = d.join(".racit-release-pin");
-        if fs::read_to_string(&stamp).ok().as_deref() == Some(rev) { continue; }
+        if fs::read_to_string(&stamp).ok().as_deref() == Some(rev) {
+            continue;
+        }
         rm_rf(&d)?;
         fs::create_dir_all(&d)?;
-        let g = |args: &[&str]| { let mut x = sh("git", &["-C"]); x.arg(&d).args(args); x };
+        let g = |args: &[&str]| {
+            let mut x = sh("git", &["-C"]);
+            x.arg(&d).args(args);
+            x
+        };
         out(&mut g(&["init", "-q"]))?;
-        out(&mut g(&["remote", "add", "origin", &format!("https://github.com/{repo}")]))?;
-        out(&mut g(&["-c", "core.autocrlf=false", "-c", "core.eol=lf", "fetch", "-q", "--depth", "1", "origin", rev]))?;
-        out(&mut g(&["-c", "core.autocrlf=false", "-c", "core.eol=lf", "checkout", "-q", "FETCH_HEAD"]))?;
+        out(&mut g(&[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://github.com/{repo}"),
+        ]))?;
+        out(&mut g(&[
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "fetch",
+            "-q",
+            "--depth",
+            "1",
+            "origin",
+            rev,
+        ]))?;
+        out(&mut g(&[
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "checkout",
+            "-q",
+            "FETCH_HEAD",
+        ]))?;
         fs::write(&stamp, rev)?;
         c.note(format!("- tools/{dir}: {repo} at {rev}"));
-        if dir == "SDL2-src" { sdl_changed = true; }
+        if dir == "SDL2-src" {
+            sdl_changed = true;
+        }
     }
     let lib = tree.join("tools/sdl2-win/lib/libSDL2.a");
     if sdl_changed || !lib.exists() {
@@ -416,10 +594,23 @@ fn windows_tools(c: &mut Ctx) -> Result<()> {
         rm_rf(&tree.join("tools/sdl2-win"))?;
         let tc = c.out.join("zig-windows-machost.cmake");
         let mut cfg = win_cmd(c, &tree, "cmake");
-        cfg.args(["-S", "tools/SDL2-src", "-B", "tools/sdl2-win-build", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-            "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST=OFF"])
-            .arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", tc.display()))
-            .arg(format!("-DCMAKE_INSTALL_PREFIX={}", tree.join("tools/sdl2-win").display()));
+        cfg.args([
+            "-S",
+            "tools/SDL2-src",
+            "-B",
+            "tools/sdl2-win-build",
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DSDL_SHARED=OFF",
+            "-DSDL_STATIC=ON",
+            "-DSDL_TEST=OFF",
+        ])
+        .arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", tc.display()))
+        .arg(format!(
+            "-DCMAKE_INSTALL_PREFIX={}",
+            tree.join("tools/sdl2-win").display()
+        ));
         c.run("sdl2-win-configure", &mut cfg)?;
         let mut b = win_cmd(c, &tree, "cmake");
         b.args(["--build", "tools/sdl2-win-build", "--target", "install"]);
@@ -434,25 +625,51 @@ fn win_cmd(c: &Ctx, tree: &Path, prog: &str) -> Command {
     let w = c.cfg.win.as_ref().expect("win config");
     let zig_dir = w.zig.parent().unwrap_or(Path::new("/"));
     let mut cmd = Command::new(prog);
-    cmd.current_dir(tree).env("RACIT_TREE", tree).env("ZIG_EXE", &w.zig)
-        .env("PATH", format!("{}:{}", zig_dir.display(), std::env::var("PATH").unwrap_or_default()))
-        .env("PY", c.py()).env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string());
+    cmd.current_dir(tree)
+        .env("RACIT_TREE", tree)
+        .env("ZIG_EXE", &w.zig)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                zig_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("PY", c.py())
+        .env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string());
     cmd
 }
 
 fn write_machost_toolchain(c: &Ctx) -> Result<()> {
-    let w = c.cfg.win.as_ref().ok_or_else(|| anyhow!("no [win] section in the config"))?;
+    let w = c
+        .cfg
+        .win
+        .as_ref()
+        .ok_or_else(|| anyhow!("no [win] section in the config"))?;
     let ver = out(sh(&w.zig.to_string_lossy(), &["version"]))?;
-    ensure!(ver.starts_with("0.16."), "{} is zig {ver}; the game needs 0.16.x (0.17 rejects its patchable-function-entry flags)", w.zig.display());
+    ensure!(
+        ver.starts_with("0.16."),
+        "{} is zig {ver}; the game needs 0.16.x (0.17 rejects its patchable-function-entry flags)",
+        w.zig.display()
+    );
     for t in ["llvm-ar", "llvm-ranlib", "llvm-rc"] {
-        ensure!(w.llvm_bin.join(t).exists(), "no {t} in {}", w.llvm_bin.display());
+        ensure!(
+            w.llvm_bin.join(t).exists(),
+            "no {t} in {}",
+            w.llvm_bin.display()
+        );
     }
     let l = w.llvm_bin.display();
-    fs::write(c.out.join("zig-windows-machost.cmake"), format!(
-        "# Written by racit-release: the repository's zig toolchain, with LLVM's ar/ranlib/rc in place of\n\
+    fs::write(
+        c.out.join("zig-windows-machost.cmake"),
+        format!(
+            "# Written by racit-release: the repository's zig toolchain, with LLVM's ar/ranlib/rc in place of\n\
          # its .cmd wrappers, which only run on a Windows host.\n\
          include(\"$ENV{{RACIT_TREE}}/windows/toolchain/zig-windows.cmake\")\n\
-         set(CMAKE_AR     \"{l}/llvm-ar\")\nset(CMAKE_RANLIB \"{l}/llvm-ranlib\")\nset(CMAKE_RC_COMPILER \"{l}/llvm-rc\")\n"))?;
+         set(CMAKE_AR     \"{l}/llvm-ar\")\nset(CMAKE_RANLIB \"{l}/llvm-ranlib\")\nset(CMAKE_RC_COMPILER \"{l}/llvm-rc\")\n"
+        ),
+    )?;
     Ok(())
 }
 
@@ -465,25 +682,47 @@ fn pipelines(c: &mut Ctx) -> Result<()> {
     c.need_space("pipeline 1.00")?;
     c.step("pipeline: BCUS98124 1.00");
     let mut p = sh("bash", &["scripts/pipeline.sh"]);
-    p.current_dir(&tree).env("PY", c.py()).env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
+    p.current_dir(&tree)
+        .env("PY", c.py())
+        .env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
         .env("CMAKE_GENERATOR", "Unix Makefiles");
-    if skip_desktop { p.env("SKIP_DESKTOP", "1"); }
+    if skip_desktop {
+        p.env("SKIP_DESKTOP", "1");
+    }
     let min = if c.args.mac { Some(mac_min(c)?) } else { None };
-    if let Some(m) = &min { p.env("MACOSX_DEPLOYMENT_TARGET", m); }
+    if let Some(m) = &min {
+        p.env("MACOSX_DEPLOYMENT_TARGET", m);
+    }
     c.run("pipeline-100", &mut p)?;
-    if c.args.mac { put(&tree.join("game/build/RaCACiTRecomp"), &c.bin.join("mac-100/RaCACiTRecomp"))?; }
+    if c.args.mac {
+        put(
+            &tree.join("game/build/RaCACiTRecomp"),
+            &c.bin.join("mac-100/RaCACiTRecomp"),
+        )?;
+    }
 
     if let Some(u120) = c.cfg.inputs.us120_elf.clone() {
         c.need_space("pipeline 1.20")?;
         c.step("pipeline: BCUS98124 update 1.20");
         let mut p = sh("bash", &["scripts/pipeline.sh"]);
-        p.arg(&u120).current_dir(&tree).env("PY", c.py()).env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
-            .env("CMAKE_GENERATOR", "Unix Makefiles").env("LIBSRE", tree.join("input/libsre.prx"));
-        if skip_desktop { p.env("SKIP_DESKTOP", "1"); }
-        if let Some(m) = &min { p.env("MACOSX_DEPLOYMENT_TARGET", m); }
+        p.arg(&u120)
+            .current_dir(&tree)
+            .env("PY", c.py())
+            .env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
+            .env("CMAKE_GENERATOR", "Unix Makefiles")
+            .env("LIBSRE", tree.join("input/libsre.prx"));
+        if skip_desktop {
+            p.env("SKIP_DESKTOP", "1");
+        }
+        if let Some(m) = &min {
+            p.env("MACOSX_DEPLOYMENT_TARGET", m);
+        }
         c.run("pipeline-120", &mut p)?;
         if c.args.mac {
-            put(&tree.join("out/BCUS98124-1.20/build/RaCACiTRecomp"), &c.bin.join("mac-120/RaCACiTRecomp"))?;
+            put(
+                &tree.join("out/BCUS98124-1.20/build/RaCACiTRecomp"),
+                &c.bin.join("mac-120/RaCACiTRecomp"),
+            )?;
         }
     }
     Ok(())
@@ -504,14 +743,34 @@ struct WinTarget {
 fn hook_check(c: &mut Ctx, root: &Path, recomp: &Path, profile: &str, log: &str) -> Result<()> {
     // Trees from before the Rust lift tools have the Python checker; later ones have check-lift-hooks.
     let mut chk = if root.join("scripts/check_lift_hooks.py").is_file() {
-        sh(&c.cfg.python, &["-I", "-X", "utf8", "scripts/check_lift_hooks.py"])
+        sh(
+            &c.cfg.python,
+            &["-I", "-X", "utf8", "scripts/check_lift_hooks.py"],
+        )
     } else {
-        sh("cargo", &["run", "-q", "--release", "--manifest-path", "rust/racit-lift/Cargo.toml", "--bin", "check-lift-hooks", "--"])
+        sh(
+            "cargo",
+            &[
+                "run",
+                "-q",
+                "--release",
+                "--manifest-path",
+                "rust/racit-lift/Cargo.toml",
+                "--bin",
+                "check-lift-hooks",
+                "--",
+            ],
+        )
     };
-    chk.arg(recomp).args(["--profile", profile]).current_dir(root);
+    chk.arg(recomp)
+        .args(["--profile", profile])
+        .current_dir(root);
     c.run(log, &mut chk)?;
     let msg = fs::read_to_string(c.logs.join(format!("{log}.log"))).unwrap_or_default();
-    c.note(format!("- lift hooks {profile}: PASS ({})", msg.lines().last().unwrap_or("").trim()));
+    c.note(format!(
+        "- lift hooks {profile}: PASS ({})",
+        msg.lines().last().unwrap_or("").trim()
+    ));
     Ok(())
 }
 
@@ -520,19 +779,56 @@ fn build_windows(c: &mut Ctx) -> Result<()> {
     let us120 = c.cfg.inputs.us120_elf.clone();
     let mut targets = vec![];
     for compat in [false, true] {
-        let exe = if compat { "RaCACiT_compat.exe" } else { "RaCACiT.exe" };
-        targets.push(WinTarget { root: tree.clone(), build_dir: if compat { "game/build-win-compat" } else { "game/build-win" },
-            profile: "BCUS98124-1.00", elf: tree.join("input/EBOOT.ELF"), recomp: tree.join("game/src/recomp"), compat,
-            dest: format!("v{}/{exe}", c.args.build) });
+        let exe = if compat {
+            "RaCACiT_compat.exe"
+        } else {
+            "RaCACiT.exe"
+        };
+        targets.push(WinTarget {
+            root: tree.clone(),
+            build_dir: if compat {
+                "game/build-win-compat"
+            } else {
+                "game/build-win"
+            },
+            profile: "BCUS98124-1.00",
+            elf: tree.join("input/EBOOT.ELF"),
+            recomp: tree.join("game/src/recomp"),
+            compat,
+            dest: format!("v{}/{exe}", c.args.build),
+        });
         if let Some(u) = &us120 {
-            targets.push(WinTarget { root: tree.clone(),
-                build_dir: if compat { "game/build-win-u120-compat" } else { "game/build-win-u120" },
-                profile: "BCUS98124-1.20", elf: u.clone(), recomp: tree.join("out/BCUS98124-1.20/recomp"), compat,
-                dest: format!("v{}-u120/{exe}", c.args.build) });
+            targets.push(WinTarget {
+                root: tree.clone(),
+                build_dir: if compat {
+                    "game/build-win-u120-compat"
+                } else {
+                    "game/build-win-u120"
+                },
+                profile: "BCUS98124-1.20",
+                elf: u.clone(),
+                recomp: tree.join("out/BCUS98124-1.20/recomp"),
+                compat,
+                dest: format!("v{}-u120/{exe}", c.args.build),
+            });
         }
     }
-    hook_check(c, &tree, &tree.join("game/src/recomp"), "BCUS98124-1.00", "hooks-100")?;
-    if us120.is_some() { hook_check(c, &tree, &tree.join("out/BCUS98124-1.20/recomp"), "BCUS98124-1.20", "hooks-120")?; }
+    hook_check(
+        c,
+        &tree,
+        &tree.join("game/src/recomp"),
+        "BCUS98124-1.00",
+        "hooks-100",
+    )?;
+    if us120.is_some() {
+        hook_check(
+            c,
+            &tree,
+            &tree.join("out/BCUS98124-1.20/recomp"),
+            "BCUS98124-1.20",
+            "hooks-120",
+        )?;
+    }
 
     // The European disc: a converted copy of the project (scripts/build_version.sh's steps, with
     // the Mac's python and the cross toolchain).
@@ -544,37 +840,80 @@ fn build_windows(c: &mut Ctx) -> Result<()> {
         c.run("retarget-eu", &mut r)?;
         let eu = tree.join("build/BCES00511");
         let mut p = sh("bash", &["scripts/pipeline.sh"]);
-        p.current_dir(&eu).env("PY", c.py()).env("SKIP_DESKTOP", "1").env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string());
+        p.current_dir(&eu)
+            .env("PY", c.py())
+            .env("SKIP_DESKTOP", "1")
+            .env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string());
         c.run("pipeline-eu", &mut p)?;
-        hook_check(c, &eu, &eu.join("game/src/recomp"), "BCES00511-1.00", "hooks-eu")?;
+        hook_check(
+            c,
+            &eu,
+            &eu.join("game/src/recomp"),
+            "BCES00511-1.00",
+            "hooks-eu",
+        )?;
         for compat in [false, true] {
-            targets.push(WinTarget { root: eu.clone(), build_dir: if compat { "game/build-win-compat" } else { "game/build-win" },
-                profile: "BCES00511-1.00", elf: tree.join("input/BCES00511/EBOOT.ELF"), recomp: eu.join("game/src/recomp"), compat,
-                dest: format!("v{}/RaCACiT_BCES00511{}.exe", c.args.build, if compat { "_compat" } else { "" }) });
+            targets.push(WinTarget {
+                root: eu.clone(),
+                build_dir: if compat {
+                    "game/build-win-compat"
+                } else {
+                    "game/build-win"
+                },
+                profile: "BCES00511-1.00",
+                elf: tree.join("input/BCES00511/EBOOT.ELF"),
+                recomp: eu.join("game/src/recomp"),
+                compat,
+                dest: format!(
+                    "v{}/RaCACiT_BCES00511{}.exe",
+                    c.args.build,
+                    if compat { "_compat" } else { "" }
+                ),
+            });
         }
     } else if c.args.allow_missing_eu {
         c.shippable = false;
         c.note("- European disc: NOT BUILT (no inputs.eu100_elf; --allow-missing-eu). Not shippable: 1.0.1 had the EU programs.");
     } else {
-        bail!("no inputs.eu100_elf in the config: the official Windows zip carries RaCACiT_BCES00511(.exe/_compat.exe). \
-               Configure the European EBOOT, or pass --allow-missing-eu for a test build");
+        bail!(
+            "no inputs.eu100_elf in the config: the official Windows zip carries RaCACiT_BCES00511(.exe/_compat.exe). \
+               Configure the European EBOOT, or pass --allow-missing-eu for a test build"
+        );
     }
 
     let tc = c.out.join("zig-windows-machost.cmake");
     let python = out(sh("/usr/bin/env", &["which", &c.cfg.python]))?;
     for t in targets {
         c.need_space(&format!("Windows build {}", t.dest))?;
-        c.step(&format!("Windows {} {}", t.profile, if t.compat { "compat" } else { "AVX2" }));
+        c.step(&format!(
+            "Windows {} {}",
+            t.profile,
+            if t.compat { "compat" } else { "AVX2" }
+        ));
         let log = t.dest.replace(['/', '.'], "-");
         let mut cfg = win_cmd(c, &t.root, "cmake");
-        cfg.args(["-S", "windows", "-B", t.build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"])
-            .arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", tc.display()))
-            .arg(format!("-DPython3_EXECUTABLE={python}"))
-            .arg(format!("-DRACACIT_GAME_PROFILE={}", t.profile))
-            .arg(format!("-DRACACIT_ELF={}", t.elf.display()))
-            .arg(format!("-DRACACIT_CPU_COMPAT={}", if t.compat { "ON" } else { "OFF" }));
+        cfg.args([
+            "-S",
+            "windows",
+            "-B",
+            t.build_dir,
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+        ])
+        .arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", tc.display()))
+        .arg(format!("-DPython3_EXECUTABLE={python}"))
+        .arg(format!("-DRACACIT_GAME_PROFILE={}", t.profile))
+        .arg(format!("-DRACACIT_ELF={}", t.elf.display()))
+        .arg(format!(
+            "-DRACACIT_CPU_COMPAT={}",
+            if t.compat { "ON" } else { "OFF" }
+        ));
         if t.root != tree {
-            cfg.arg(format!("-DSDL2_DIR={}", tree.join("tools/sdl2-win/lib/cmake/SDL2").display()));
+            cfg.arg(format!(
+                "-DSDL2_DIR={}",
+                tree.join("tools/sdl2-win/lib/cmake/SDL2").display()
+            ));
         }
         c.run(&format!("{log}-configure"), &mut cfg)?;
         let mut b = win_cmd(c, &t.root, "cmake");
@@ -582,14 +921,28 @@ fn build_windows(c: &mut Ctx) -> Result<()> {
         c.run(&format!("{log}-build"), &mut b)?;
         // The build itself re-checks the hooks (game/CMakeLists.txt); its stamp says it did.
         let bd = t.root.join(t.build_dir).join("game");
-        ensure!(bd.join("lift-hooks.ok").exists(), "{}: no lift-hooks.ok, the hook check did not run", bd.display());
-        let exe = bd.join(if t.compat { "RaCACiT_compat.exe" } else { "RaCACiT.exe" });
+        ensure!(
+            bd.join("lift-hooks.ok").exists(),
+            "{}: no lift-hooks.ok, the hook check did not run",
+            bd.display()
+        );
+        let exe = bd.join(if t.compat {
+            "RaCACiT_compat.exe"
+        } else {
+            "RaCACiT.exe"
+        });
         ensure!(exe.exists(), "no {}", exe.display());
         let _ = &t.recomp;
         put(&exe, &c.bin.join("win/builds").join(&t.dest))?;
-        c.note(format!("- {}: built, hooks checked ({} bytes)", t.dest, fs::metadata(&exe)?.len()));
+        c.note(format!(
+            "- {}: built, hooks checked ({} bytes)",
+            t.dest,
+            fs::metadata(&exe)?.len()
+        ));
         // ~1.5 GB of objects per build: gone once the exe is out, unless --keep-builds.
-        if !c.args.keep_builds { rm_rf(&t.root.join(t.build_dir))?; }
+        if !c.args.keep_builds {
+            rm_rf(&t.root.join(t.build_dir))?;
+        }
     }
     Ok(())
 }
@@ -598,7 +951,10 @@ fn build_windows_launcher(c: &mut Ctx) -> Result<()> {
     c.step("Windows launcher");
     let tree = c.tree.clone();
     let w = c.cfg.win.as_ref().unwrap();
-    let mut icon = sh(&c.cfg.python, &["-I", "launcher/make_icon.py", "launcher/build/icon.ico"]);
+    let mut icon = sh(
+        &c.cfg.python,
+        &["-I", "launcher/make_icon.py", "launcher/build/icon.ico"],
+    );
     fs::create_dir_all(tree.join("launcher/build"))?;
     icon.current_dir(&tree);
     c.run("launcher-icon", &mut icon)?;
@@ -607,17 +963,57 @@ fn build_windows_launcher(c: &mut Ctx) -> Result<()> {
     fs::create_dir_all(exe.parent().unwrap())?;
     let mut z = Command::new(&w.zig);
     z.current_dir(tree.join("launcher/src"))
-        .args(["c++", "-target", "x86_64-windows-gnu", "-std=c++17", "-O2", "-municode", "-DUNICODE", "-D_UNICODE",
-            "app.cpp", "gfx.cpp", "iso.cpp", "store.cpp", "util.cpp", "launcher.rc"])
-        .arg(format!("-I{}", tree.join("tools/sdl2-win/include").display()))
+        .args([
+            "c++",
+            "-target",
+            "x86_64-windows-gnu",
+            "-std=c++17",
+            "-O2",
+            "-municode",
+            "-DUNICODE",
+            "-D_UNICODE",
+            "app.cpp",
+            "gfx.cpp",
+            "iso.cpp",
+            "store.cpp",
+            "util.cpp",
+            "launcher.rc",
+        ])
+        .arg(format!(
+            "-I{}",
+            tree.join("tools/sdl2-win/include").display()
+        ))
         .arg(format!("-L{}", tree.join("tools/sdl2-win/lib").display()))
-        .args(["-lSDL2", "-ld2d1", "-ldwrite", "-lwindowscodecs", "-lole32", "-loleaut32", "-luuid", "-lshell32",
-            "-lshlwapi", "-lwinhttp", "-lbcrypt", "-lsetupapi", "-limm32", "-lversion", "-lwinmm", "-lgdi32", "-luser32",
-            "-ladvapi32", "-Wl,--subsystem,windows", "-o"]).arg(&exe);
+        .args([
+            "-lSDL2",
+            "-ld2d1",
+            "-ldwrite",
+            "-lwindowscodecs",
+            "-lole32",
+            "-loleaut32",
+            "-luuid",
+            "-lshell32",
+            "-lshlwapi",
+            "-lwinhttp",
+            "-lbcrypt",
+            "-lsetupapi",
+            "-limm32",
+            "-lversion",
+            "-lwinmm",
+            "-lgdi32",
+            "-luser32",
+            "-ladvapi32",
+            "-Wl,--subsystem,windows",
+            "-o",
+        ])
+        .arg(&exe);
     // launcher/build.sh is the source of truth: stop if it changed its command.
     let bs = fs::read_to_string(tree.join("launcher/build.sh"))?;
-    ensure!(bs.contains("app.cpp gfx.cpp iso.cpp store.cpp util.cpp launcher.rc") && bs.contains("-lsetupapi -limm32 -lversion -lwinmm"),
-        "launcher/build.sh changed its compile command: update build_windows_launcher in racit-release");
+    ensure!(
+        bs.contains("app.cpp gfx.cpp iso.cpp store.cpp util.cpp launcher.rc")
+            && bs.contains("-lsetupapi -limm32 -lversion -lwinmm"),
+        "launcher/build.sh changed its compile command: update build_windows_launcher in racit-release"
+    );
     c.run("launcher-win", &mut z)?;
     c.note(format!("- RaCACiT Launcher.exe {}: built", c.ver));
     Ok(())
@@ -631,55 +1027,130 @@ fn reference_zip(c: &mut Ctx) -> Result<PathBuf> {
     let refdir = c.cfg.work.join("ref");
     fs::create_dir_all(&refdir)?;
     if let Some(f) = &c.args.carry_from {
-        if f.ends_with(".zip") { return Ok(PathBuf::from(f)); }
+        if f.ends_with(".zip") {
+            return Ok(PathBuf::from(f));
+        }
     }
     let tag = match &c.args.carry_from {
         Some(t) => t.clone(),
         None => {
             // The newest published upstream release with a Windows launcher zip, older than this tag.
-            let list = out(sh("gh", &["release", "list", "-R", &c.cfg.upstream, "-L", "30", "--exclude-drafts",
-                "--json", "tagName", "-q", ".[].tagName"]))?;
+            let list = out(sh(
+                "gh",
+                &[
+                    "release",
+                    "list",
+                    "-R",
+                    &c.cfg.upstream,
+                    "-L",
+                    "30",
+                    "--exclude-drafts",
+                    "--json",
+                    "tagName",
+                    "-q",
+                    ".[].tagName",
+                ],
+            ))?;
             let mut found = None;
             for t in list.lines() {
-                if t == c.args.tag { continue; }
-                let a = out(sh("gh", &["release", "view", t, "-R", &c.cfg.upstream, "--json", "assets", "-q", ".assets[].name"]))?;
-                if a.lines().any(|n| n.starts_with("RACiT_Windows_Launcher_") && n.ends_with(".zip")) { found = Some(t.to_string()); break; }
+                if t == c.args.tag {
+                    continue;
+                }
+                let a = out(sh(
+                    "gh",
+                    &[
+                        "release",
+                        "view",
+                        t,
+                        "-R",
+                        &c.cfg.upstream,
+                        "--json",
+                        "assets",
+                        "-q",
+                        ".assets[].name",
+                    ],
+                ))?;
+                if a.lines()
+                    .any(|n| n.starts_with("RACiT_Windows_Launcher_") && n.ends_with(".zip"))
+                {
+                    found = Some(t.to_string());
+                    break;
+                }
             }
-            found.ok_or_else(|| anyhow!("no upstream release with a Windows zip; pass --carry-from"))?
+            found.ok_or_else(|| {
+                anyhow!("no upstream release with a Windows zip; pass --carry-from")
+            })?
         }
     };
     let d = refdir.join(&tag);
     fs::create_dir_all(&d)?;
-    let have = fs::read_dir(&d)?.filter_map(|e| e.ok()).map(|e| e.path())
-        .find(|p| p.file_name().map(|n| n.to_string_lossy().starts_with("RACiT_Windows_Launcher_")).unwrap_or(false));
-    if let Some(p) = have { return Ok(p); }
+    let have = fs::read_dir(&d)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with("RACiT_Windows_Launcher_"))
+                .unwrap_or(false)
+        });
+    if let Some(p) = have {
+        return Ok(p);
+    }
     c.step(&format!("downloading the {tag} Windows zip (reference)"));
-    out(sh("gh", &["release", "download", &tag, "-R", &c.cfg.upstream, "-p", "RACiT_Windows_Launcher_*.zip", "-D"]).arg(&d))?;
-    fs::read_dir(&d)?.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e == "zip"))
+    out(sh(
+        "gh",
+        &[
+            "release",
+            "download",
+            &tag,
+            "-R",
+            &c.cfg.upstream,
+            "-p",
+            "RACiT_Windows_Launcher_*.zip",
+            "-D",
+        ],
+    )
+    .arg(&d))?;
+    fs::read_dir(&d)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "zip"))
         .ok_or_else(|| anyhow!("download of {tag}'s Windows zip failed"))
 }
 
 /// Normalized entry names: the top folder and build numbers made generic, so two releases compare.
 fn shape(names: &[String]) -> BTreeSet<String> {
-    names.iter().filter(|n| !n.ends_with('/')).map(|n| {
-        let mut parts: Vec<String> = n.split('/').map(String::from).collect();
-        if let Some(top) = parts.first_mut() { if top.starts_with("RACiT_") { *top = "RACiT_*".into(); } }
-        for i in 1..parts.len() {
-            if parts[i - 1] == "builds" {
-                let p = &parts[i];
-                if let Some(rest) = p.strip_prefix('v') {
-                    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                    if !digits.is_empty() { parts[i] = format!("v*{}", &rest[digits.len()..]); }
+    names
+        .iter()
+        .filter(|n| !n.ends_with('/'))
+        .map(|n| {
+            let mut parts: Vec<String> = n.split('/').map(String::from).collect();
+            if let Some(top) = parts.first_mut() {
+                if top.starts_with("RACiT_") {
+                    *top = "RACiT_*".into();
                 }
             }
-        }
-        parts.join("/")
-    }).collect()
+            for i in 1..parts.len() {
+                if parts[i - 1] == "builds" {
+                    let p = &parts[i];
+                    if let Some(rest) = p.strip_prefix('v') {
+                        let digits: String =
+                            rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        if !digits.is_empty() {
+                            parts[i] = format!("v*{}", &rest[digits.len()..]);
+                        }
+                    }
+                }
+            }
+            parts.join("/")
+        })
+        .collect()
 }
 
 fn zip_names(z: &Path) -> Result<Vec<String>> {
     let a = zip::ZipArchive::new(fs::File::open(z)?)?;
-    Ok(a.file_names().map(|n| n.map(|n| n.into_owned())).collect::<std::result::Result<Vec<String>, _>>()?)
+    Ok(a.file_names()
+        .map(|n| n.map(|n| n.into_owned()))
+        .collect::<std::result::Result<Vec<String>, _>>()?)
 }
 
 // ------------------------------------------------------------- packaging ----
@@ -692,7 +1163,10 @@ fn package_mac(c: &mut Ctx) -> Result<PathBuf> {
         None => {
             let p = c.cfg.work.join(format!("macos-libs-{min}"));
             if !p.join("lib/libSDL3.dylib").exists() {
-                c.step(&format!("macOS libraries for macOS {min} (once, kept in {})", p.display()));
+                c.step(&format!(
+                    "macOS libraries for macOS {min} (once, kept in {})",
+                    p.display()
+                ));
                 let mut b = sh("bash", &["mac/build_macos_libs.sh"]);
                 b.arg(&p).current_dir(&c.tree).env("MACOS_MIN", &min);
                 c.run("macos-libs", &mut b)?;
@@ -702,17 +1176,35 @@ fn package_mac(c: &mut Ctx) -> Result<PathBuf> {
     };
     let outdir = c.dist.join("mac");
     rm_rf(&outdir)?;
-    let mut p = sh("bash", &["mac/package_macos.sh", "--version", &c.args.build.to_string(), "--game"]);
+    let mut p = sh(
+        "bash",
+        &[
+            "mac/package_macos.sh",
+            "--version",
+            &c.args.build.to_string(),
+            "--game",
+        ],
+    );
     p.arg(c.bin.join("mac-100/RaCACiTRecomp"));
-    if c.cfg.inputs.us120_elf.is_some() { p.arg("--game120").arg(c.bin.join("mac-120/RaCACiTRecomp")); }
-    p.arg("--out").arg(&outdir).current_dir(&c.tree).env("MACOS_MIN", &min).env("MACOS_LIB_PREFIX", &prefix);
+    if c.cfg.inputs.us120_elf.is_some() {
+        p.arg("--game120").arg(c.bin.join("mac-120/RaCACiTRecomp"));
+    }
+    p.arg("--out")
+        .arg(&outdir)
+        .current_dir(&c.tree)
+        .env("MACOS_MIN", &min)
+        .env("MACOS_LIB_PREFIX", &prefix);
     c.note(format!("- macOS zip targets macOS {min} and later"));
     c.run("package-macos", &mut p)?;
     let name = format!("RACiT-{}-macos.zip", c.ver);
     let z = c.dist.join(&name);
     fs::rename(outdir.join(&name), &z)?;
     rm_rf(&outdir)?;
-    c.note(format!("- {name}: {} bytes, sha256 {}", fs::metadata(&z)?.len(), sha256(&z)?));
+    c.note(format!(
+        "- {name}: {} bytes, sha256 {}",
+        fs::metadata(&z)?.len(),
+        sha256(&z)?
+    ));
     Ok(z)
 }
 
@@ -726,23 +1218,43 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
     let tree = c.tree.clone();
 
     // From the tag: the launcher, its README, the built-in mods.
-    put(&c.bin.join("win/RaCACiT Launcher.exe"), &root.join("RaCACiT Launcher.exe"))?;
+    put(
+        &c.bin.join("win/RaCACiT Launcher.exe"),
+        &root.join("RaCACiT Launcher.exe"),
+    )?;
     put(&tree.join("launcher/README.txt"), &root.join("README.txt"))?;
     let mut mods = vec![];
-    walk(&tree.join("launcher/mods"), &tree.join("launcher/mods"), &mut mods)?;
+    walk(
+        &tree.join("launcher/mods"),
+        &tree.join("launcher/mods"),
+        &mut mods,
+    )?;
     for m in mods {
         let from = tree.join("launcher/mods").join(&m);
-        if from.is_file() { put(&from, &root.join("mods").join(&m))?; }
+        if from.is_file() {
+            put(&from, &root.join("mods").join(&m))?;
+        }
     }
     // The games just built.
     let mut built = vec![];
-    walk(&c.bin.join("win/builds"), &c.bin.join("win/builds"), &mut built)?;
+    walk(
+        &c.bin.join("win/builds"),
+        &c.bin.join("win/builds"),
+        &mut built,
+    )?;
     for b in &built {
         let from = c.bin.join("win/builds").join(b);
-        if from.is_file() { put(&from, &root.join("builds").join(b))?; }
+        if from.is_file() {
+            put(&from, &root.join("builds").join(b))?;
+        }
     }
     for d in [format!("v{n}"), format!("v{n}-u120")] {
-        if root.join("builds").join(&d).is_dir() { fs::write(root.join("builds").join(&d).join("version.txt"), format!("{n}\r\n"))?; }
+        if root.join("builds").join(&d).is_dir() {
+            fs::write(
+                root.join("builds").join(&d).join("version.txt"),
+                format!("{n}\r\n"),
+            )?;
+        }
     }
 
     // From the last official zip: Into the Nexus (built elsewhere), the shader caches the launcher
@@ -752,10 +1264,14 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
     let mut carried = vec![];
     for i in 0..a.len() {
         let mut f = a.by_index(i)?;
-        if f.is_dir() { continue; }
+        if f.is_dir() {
+            continue;
+        }
         let name = f.name()?.into_owned();
         let rel: Vec<&str> = name.splitn(2, '/').collect();
-        if rel.len() != 2 { continue; }
+        if rel.len() != 2 {
+            continue;
+        }
         let rel = rel[1];
         let dest = if rel.starts_with("nexus/") {
             Some(root.join(rel))
@@ -763,12 +1279,21 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
             let (dir, file) = r.split_once('/').unwrap_or(("", ""));
             if dir.starts_with('v') && !dir.contains('-') {
                 match file {
-                    "shadercache.bin" | "pipelinelist.bin" => Some(root.join(format!("builds/v{n}/{file}"))),
-                    "README.txt" => { f.read_to_string(&mut prev_readme)?; None }
+                    "shadercache.bin" | "pipelinelist.bin" => {
+                        Some(root.join(format!("builds/v{n}/{file}")))
+                    }
+                    "README.txt" => {
+                        f.read_to_string(&mut prev_readme)?;
+                        None
+                    }
                     _ => None,
                 }
-            } else { None }
-        } else { None };
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if let Some(d) = dest {
             fs::create_dir_all(d.parent().unwrap())?;
             let mut w = fs::File::create(&d)?;
@@ -776,19 +1301,37 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
             carried.push(rel.to_string());
         }
     }
-    c.note(format!("- carried from {}: {} files (nexus/, shader caches)", reference.file_name().unwrap().to_string_lossy(), carried.len()));
+    c.note(format!(
+        "- carried from {}: {} files (nexus/, shader caches)",
+        reference.file_name().unwrap().to_string_lossy(),
+        carried.len()
+    ));
 
     // builds\vN\README.txt: the new section on top of the history, as the official zips have it.
     let head = match &c.args.build_notes {
         Some(p) => fs::read_to_string(p)?,
         None => {
             c.note("- builds README: no --build-notes, a generic header was written (write real notes before publishing)");
-            let t = format!("Ratchet & Clank: A Crack in Time -- Windows build v{n} (RACiT {})", c.ver);
-            format!("{t}\n{}\n\nSee the release notes of RACiT {} for what changed.\n", "=".repeat(t.len()), c.ver)
+            let t = format!(
+                "Ratchet & Clank: A Crack in Time -- Windows build v{n} (RACiT {})",
+                c.ver
+            );
+            format!(
+                "{t}\n{}\n\nSee the release notes of RACiT {} for what changed.\n",
+                "=".repeat(t.len()),
+                c.ver
+            )
         }
     };
-    let readme = format!("{}\n\n{}", head.trim_end(), prev_readme.trim_start_matches('\u{feff}'));
-    fs::write(root.join(format!("builds/v{n}/README.txt")), readme.replace("\r\n", "\n").replace('\n', "\r\n"))?;
+    let readme = format!(
+        "{}\n\n{}",
+        head.trim_end(),
+        prev_readme.trim_start_matches('\u{feff}')
+    );
+    fs::write(
+        root.join(format!("builds/v{n}/README.txt")),
+        readme.replace("\r\n", "\n").replace('\n', "\r\n"),
+    )?;
 
     // Zip it.
     let name = format!("RACiT_Windows_Launcher_{}.zip", c.ver);
@@ -797,7 +1340,8 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
     walk(&stage, &stage, &mut files)?;
     let mut w = zip::ZipWriter::new(fs::File::create(&z)?);
     let opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated).large_file(false);
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(false);
     let mut buf = vec![];
     for f in &files {
         let full = stage.join(f);
@@ -806,7 +1350,10 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
             w.add_directory(format!("{entry}/"), opts)?;
         } else {
             let exe = entry.ends_with(".exe");
-            w.start_file(&entry, opts.unix_permissions(if exe { 0o755 } else { 0o644 }))?;
+            w.start_file(
+                &entry,
+                opts.unix_permissions(if exe { 0o755 } else { 0o644 }),
+            )?;
             buf.clear();
             fs::File::open(&full)?.read_to_end(&mut buf)?;
             w.write_all(&buf)?;
@@ -820,15 +1367,42 @@ fn package_windows(c: &mut Ctx, reference: &Path) -> Result<PathBuf> {
     let theirs = shape(&zip_names(reference)?);
     let missing: Vec<_> = theirs.difference(&ours).cloned().collect();
     let extra: Vec<_> = ours.difference(&theirs).cloned().collect();
-    c.note(format!("- {name}: {} bytes, sha256 {}", fs::metadata(&z)?.len(), sha256(&z)?));
-    c.note(format!("- layout vs {}: {} files in both; new: {}; missing: {}",
-        reference.file_name().unwrap().to_string_lossy(), ours.intersection(&theirs).count(),
-        if extra.is_empty() { "none".into() } else { extra.join(", ") },
-        if missing.is_empty() { "none".into() } else { missing.join(", ") }));
-    let unexpected: Vec<_> = missing.iter().filter(|m| !(c.args.allow_missing_eu && m.contains("BCES00511"))).collect();
-    ensure!(unexpected.is_empty(), "the Windows zip lacks files the last official one had: {unexpected:?}");
-    let odd: Vec<_> = extra.iter().filter(|e| !e.contains("/builds/v*-u120/") && !e.starts_with("RACiT_*/mods/")).collect();
-    ensure!(odd.is_empty(), "the Windows zip has files the official layout doesn't: {odd:?}");
+    c.note(format!(
+        "- {name}: {} bytes, sha256 {}",
+        fs::metadata(&z)?.len(),
+        sha256(&z)?
+    ));
+    c.note(format!(
+        "- layout vs {}: {} files in both; new: {}; missing: {}",
+        reference.file_name().unwrap().to_string_lossy(),
+        ours.intersection(&theirs).count(),
+        if extra.is_empty() {
+            "none".into()
+        } else {
+            extra.join(", ")
+        },
+        if missing.is_empty() {
+            "none".into()
+        } else {
+            missing.join(", ")
+        }
+    ));
+    let unexpected: Vec<_> = missing
+        .iter()
+        .filter(|m| !(c.args.allow_missing_eu && m.contains("BCES00511")))
+        .collect();
+    ensure!(
+        unexpected.is_empty(),
+        "the Windows zip lacks files the last official one had: {unexpected:?}"
+    );
+    let odd: Vec<_> = extra
+        .iter()
+        .filter(|e| !e.contains("/builds/v*-u120/") && !e.starts_with("RACiT_*/mods/"))
+        .collect();
+    ensure!(
+        odd.is_empty(),
+        "the Windows zip has files the official layout doesn't: {odd:?}"
+    );
     Ok(z)
 }
 
@@ -851,39 +1425,93 @@ fn smoke_mac(c: &mut Ctx, z: &Path) -> Result<()> {
     let runs: Vec<(&str, PathBuf, Vec<String>)> = {
         let mut v = vec![];
         if let (Some(g), Some(inst)) = (&s.game, &s.installed_100) {
-            v.push(("1.00", rel.join(format!("builds/v{}", c.args.build)),
-                vec!["--elf".into(), c.cfg.inputs.us100_elf.display().to_string(), "--game".into(), g.display().to_string(),
-                     "--installed".into(), inst.display().to_string()]));
+            v.push((
+                "1.00",
+                rel.join(format!("builds/v{}", c.args.build)),
+                vec![
+                    "--elf".into(),
+                    c.cfg.inputs.us100_elf.display().to_string(),
+                    "--game".into(),
+                    g.display().to_string(),
+                    "--installed".into(),
+                    inst.display().to_string(),
+                ],
+            ));
         }
-        if let (Some(g), Some(inst), Some(u), Some(e)) = (&s.game, &s.installed_120, &s.update, &c.cfg.inputs.us120_elf) {
-            v.push(("1.20", rel.join(format!("builds/v{}-u120", c.args.build)),
-                vec!["--elf".into(), e.display().to_string(), "--update".into(), u.display().to_string(), "--game".into(),
-                     g.display().to_string(), "--installed".into(), inst.display().to_string()]));
+        if let (Some(g), Some(inst), Some(u), Some(e)) = (
+            &s.game,
+            &s.installed_120,
+            &s.update,
+            &c.cfg.inputs.us120_elf,
+        ) {
+            v.push((
+                "1.20",
+                rel.join(format!("builds/v{}-u120", c.args.build)),
+                vec![
+                    "--elf".into(),
+                    e.display().to_string(),
+                    "--update".into(),
+                    u.display().to_string(),
+                    "--game".into(),
+                    g.display().to_string(),
+                    "--installed".into(),
+                    inst.display().to_string(),
+                ],
+            ));
         }
         v
     };
-    if runs.is_empty() { c.note("- macOS game launch: NOT RUN (no [smoke] game/installed paths)"); }
+    if runs.is_empty() {
+        c.note("- macOS game launch: NOT RUN (no [smoke] game/installed paths)");
+    }
     for (ver, build, extra) in runs {
-        if let Some(why) = owner_busy() { c.note(format!("- macOS {ver} launch: SKIPPED ({why})")); c.shippable = false; continue; }
+        if let Some(why) = owner_busy() {
+            c.note(format!("- macOS {ver} launch: SKIPPED ({why})"));
+            c.shippable = false;
+            continue;
+        }
         let mut verdict = String::from("FAIL");
         for cap in ["600", "1200"] {
             let work = c.out.join(format!("smoke/mac-run-{ver}"));
             rm_rf(&work)?;
-            let mut t = sh(&c.cfg.python, &["-I", "tests/mac_user_launch.py", "--build"]);
-            t.arg(&build).args(&extra).arg("--work").arg(&work).args(["--seconds", "60", "--cap", cap])
-                .current_dir(&c.tree).env("SDL_AUDIODRIVER", "dummy");
+            let mut t = sh(
+                &c.cfg.python,
+                &["-I", "tests/mac_user_launch.py", "--build"],
+            );
+            t.arg(&build)
+                .args(&extra)
+                .arg("--work")
+                .arg(&work)
+                .args(["--seconds", "60", "--cap", cap])
+                .current_dir(&c.tree)
+                .env("SDL_AUDIODRIVER", "dummy");
             let log = c.logs.join(format!("smoke-mac-{ver}-{cap}.log"));
             let f = fs::File::create(&log)?;
-            let code = t.stdin(Stdio::null()).stdout(f.try_clone()?).stderr(f).status()?.code();
+            let code = t
+                .stdin(Stdio::null())
+                .stdout(f.try_clone()?)
+                .stderr(f)
+                .status()?
+                .code();
             rm_rf(&work)?;
             match code {
-                Some(0) => { verdict = "PASS".into(); break; }
-                Some(2) => { verdict = format!("INCONCLUSIVE at cap {cap} s"); }
-                _ => { verdict = format!("FAIL (exit {code:?}, {})", log.display()); break; }
+                Some(0) => {
+                    verdict = "PASS".into();
+                    break;
+                }
+                Some(2) => {
+                    verdict = format!("INCONCLUSIVE at cap {cap} s");
+                }
+                _ => {
+                    verdict = format!("FAIL (exit {code:?}, {})", log.display());
+                    break;
+                }
             }
         }
         c.note(format!("- macOS {ver} user-style launch (tests/mac_user_launch.py, offscreen, muted): {verdict}"));
-        if verdict != "PASS" { c.shippable = false; }
+        if verdict != "PASS" {
+            c.shippable = false;
+        }
     }
     rm_rf(&d)?;
     Ok(())
@@ -897,13 +1525,20 @@ fn smoke_windows(c: &mut Ctx, z: &Path) -> Result<()> {
     zip::ZipArchive::new(fs::File::open(z)?)?.extract(&d)?;
     let rel = d.join(format!("RACiT_{}", c.ver));
     let (wine, wineprefix) = (c.cfg.smoke.wine.clone(), c.cfg.smoke.wineprefix.clone());
-    let (racit_wine, racit_wine_scratch) = (c.cfg.smoke.racit_wine.clone(), c.cfg.smoke.racit_wine_scratch.clone());
+    let (racit_wine, racit_wine_scratch) = (
+        c.cfg.smoke.racit_wine.clone(),
+        c.cfg.smoke.racit_wine_scratch.clone(),
+    );
     match &wine {
         Some(wine) => {
             let mut t = Command::new(wine);
-            t.arg(rel.join("RaCACiT Launcher.exe")).arg("--self-test").env("SDL_AUDIODRIVER", "dummy")
+            t.arg(rel.join("RaCACiT Launcher.exe"))
+                .arg("--self-test")
+                .env("SDL_AUDIODRIVER", "dummy")
                 .env("WINEDEBUG", "-all");
-            if let Some(p) = &wineprefix { t.env("WINEPREFIX", p); }
+            if let Some(p) = &wineprefix {
+                t.env("WINEPREFIX", p);
+            }
             c.run("smoke-win-launcher", &mut t)?;
             c.note("- Windows launcher --self-test from the zip (Wine): PASS");
         }
@@ -916,24 +1551,50 @@ fn smoke_windows(c: &mut Ctx, z: &Path) -> Result<()> {
                 c.shippable = false;
             } else {
                 // Rosetta has no AVX2: only the compat programs run under Wine on a Mac.
-                for (label, dir, u120) in [("1.00", format!("v{}", c.args.build), false), ("1.20", format!("v{}-u120", c.args.build), true)] {
-                let exe = rel.join(format!("builds/{dir}/RaCACiT_compat.exe"));
-                if u120 && !exe.is_file() { c.note("- Windows 1.20 game run (Wine): NOT RUN (no 1.20 build in the zip)"); continue; }
-                let name = format!("relsmoke-{}-{}", c.ver, if u120 { "120" } else { "100" });
-                let mut t = Command::new(rw);
-                t.arg(&exe).arg(scr).arg(&name).args(["--watch", "120"]).env("SDL_AUDIODRIVER", "dummy");
-                if u120 { t.arg("--update120"); }
-                let log = c.logs.join(format!("smoke-win-game-{}.log", if u120 { "120" } else { "100" }));
-                let f = fs::File::create(&log)?;
-                let st = t.stdin(Stdio::null()).stdout(f.try_clone()?).stderr(f).status()?;
-                let summary = fs::read_to_string(&log).unwrap_or_default();
-                let _ = rm_rf(&scr.join(&name));
-                let fails: Vec<&str> = summary.lines().filter(|l| l.contains(" FAIL") || l.contains("INVALID")).collect();
-                let passes = summary.lines().filter(|l| l.contains(" PASS ")).count();
-                let ok = st.success() && fails.is_empty() && passes >= 2;
-                c.note(format!("- Windows {label} RaCACiT_compat.exe under Wine (racit-wine --watch 120, offscreen, muted): {} ({passes} checks passed{})",
+                for (label, dir, u120) in [
+                    ("1.00", format!("v{}", c.args.build), false),
+                    ("1.20", format!("v{}-u120", c.args.build), true),
+                ] {
+                    let exe = rel.join(format!("builds/{dir}/RaCACiT_compat.exe"));
+                    if u120 && !exe.is_file() {
+                        c.note(
+                            "- Windows 1.20 game run (Wine): NOT RUN (no 1.20 build in the zip)",
+                        );
+                        continue;
+                    }
+                    let name = format!("relsmoke-{}-{}", c.ver, if u120 { "120" } else { "100" });
+                    let mut t = Command::new(rw);
+                    t.arg(&exe)
+                        .arg(scr)
+                        .arg(&name)
+                        .args(["--watch", "120"])
+                        .env("SDL_AUDIODRIVER", "dummy");
+                    if u120 {
+                        t.arg("--update120");
+                    }
+                    let log = c.logs.join(format!(
+                        "smoke-win-game-{}.log",
+                        if u120 { "120" } else { "100" }
+                    ));
+                    let f = fs::File::create(&log)?;
+                    let st = t
+                        .stdin(Stdio::null())
+                        .stdout(f.try_clone()?)
+                        .stderr(f)
+                        .status()?;
+                    let summary = fs::read_to_string(&log).unwrap_or_default();
+                    let _ = rm_rf(&scr.join(&name));
+                    let fails: Vec<&str> = summary
+                        .lines()
+                        .filter(|l| l.contains(" FAIL") || l.contains("INVALID"))
+                        .collect();
+                    let passes = summary.lines().filter(|l| l.contains(" PASS ")).count();
+                    let ok = st.success() && fails.is_empty() && passes >= 2;
+                    c.note(format!("- Windows {label} RaCACiT_compat.exe under Wine (racit-wine --watch 120, offscreen, muted): {} ({passes} checks passed{})",
                     if ok { "PASS" } else { "FAIL" }, if fails.is_empty() { String::new() } else { format!("; {}", fails.join(" | ")) }));
-                if !ok { c.shippable = false; }
+                    if !ok {
+                        c.shippable = false;
+                    }
                 }
             }
         }
@@ -949,36 +1610,113 @@ fn smoke_windows(c: &mut Ctx, z: &Path) -> Result<()> {
 fn upload(c: &mut Ctx, commit: &str, assets: &[PathBuf]) -> Result<()> {
     c.step("draft release on the fork");
     let fork = c.cfg.fork.clone();
-    ensure!(fork != c.cfg.upstream, "the fork and upstream are the same repository: refusing");
-    out(sh("gh", &["api", &format!("repos/{fork}/commits/{commit}"), "-q", ".sha"]))
-        .with_context(|| format!("{fork} doesn't have {commit} yet: sync the fork's main with upstream first"))?;
-    let existing = Command::new("gh").args(["release", "view", &c.args.tag, "-R", &fork, "--json", "isDraft", "-q", ".isDraft"])
+    ensure!(
+        fork != c.cfg.upstream,
+        "the fork and upstream are the same repository: refusing"
+    );
+    out(sh(
+        "gh",
+        &[
+            "api",
+            &format!("repos/{fork}/commits/{commit}"),
+            "-q",
+            ".sha",
+        ],
+    ))
+    .with_context(|| {
+        format!("{fork} doesn't have {commit} yet: sync the fork's main with upstream first")
+    })?;
+    let existing = Command::new("gh")
+        .args([
+            "release",
+            "view",
+            &c.args.tag,
+            "-R",
+            &fork,
+            "--json",
+            "isDraft",
+            "-q",
+            ".isDraft",
+        ])
         .output()?;
     let notes = c.out.join("release-notes.md");
     let mut body = String::new();
-    if let Some(p) = &c.args.release_notes { body.push_str(&fs::read_to_string(p)?); body.push_str("\n\n"); }
-    let _ = writeln!(body, "<!-- racit-release build report -->\n### Build report (racit-release)\n");
+    if let Some(p) = &c.args.release_notes {
+        body.push_str(&fs::read_to_string(p)?);
+        body.push_str("\n\n");
+    }
+    let _ = writeln!(
+        body,
+        "<!-- racit-release build report -->\n### Build report (racit-release)\n"
+    );
     body.push_str(&c.report);
-    if !c.shippable { body.push_str("\n**Not shippable as is: see the report above.**\n"); }
+    if !c.shippable {
+        body.push_str("\n**Not shippable as is: see the report above.**\n");
+    }
     fs::write(&notes, &body)?;
     if existing.status.success() {
         let draft = String::from_utf8_lossy(&existing.stdout).trim() == "true";
-        ensure!(draft, "{fork} already has a PUBLISHED release {}: not touching it", c.args.tag);
-        let mut up = sh("gh", &["release", "upload", &c.args.tag, "-R", &fork, "--clobber"]);
+        ensure!(
+            draft,
+            "{fork} already has a PUBLISHED release {}: not touching it",
+            c.args.tag
+        );
+        let mut up = sh(
+            "gh",
+            &["release", "upload", &c.args.tag, "-R", &fork, "--clobber"],
+        );
         up.args(assets);
         c.run("gh-upload", &mut up)?;
-        let mut ed = sh("gh", &["release", "edit", &c.args.tag, "-R", &fork, "--draft", "--notes-file"]);
+        let mut ed = sh(
+            "gh",
+            &[
+                "release",
+                "edit",
+                &c.args.tag,
+                "-R",
+                &fork,
+                "--draft",
+                "--notes-file",
+            ],
+        );
         ed.arg(&notes);
         c.run("gh-edit", &mut ed)?;
     } else {
         // A draft with --target: GitHub makes the tag only when someone publishes, so nothing is
         // pushed and no tag-triggered workflow runs.
-        let mut cr = sh("gh", &["release", "create", &c.args.tag, "-R", &fork, "--draft", "--target", commit,
-            "--title", &format!("RACiT v{}", c.ver), "--notes-file"]);
+        let mut cr = sh(
+            "gh",
+            &[
+                "release",
+                "create",
+                &c.args.tag,
+                "-R",
+                &fork,
+                "--draft",
+                "--target",
+                commit,
+                "--title",
+                &format!("RACiT v{}", c.ver),
+                "--notes-file",
+            ],
+        );
         cr.arg(&notes).args(assets);
         c.run("gh-create", &mut cr)?;
     }
-    let url = out(sh("gh", &["release", "view", &c.args.tag, "-R", &fork, "--json", "url", "-q", ".url"]))?;
+    let url = out(sh(
+        "gh",
+        &[
+            "release",
+            "view",
+            &c.args.tag,
+            "-R",
+            &fork,
+            "--json",
+            "url",
+            "-q",
+            ".url",
+        ],
+    ))?;
     c.note(format!("- draft release: {url}"));
     Ok(())
 }
@@ -988,34 +1726,69 @@ fn upload(c: &mut Ctx, commit: &str, assets: &[PathBuf]) -> Result<()> {
 fn run() -> Result<()> {
     let args = parse_args()?;
     if !args.no_queue_check {
-        ensure!(std::env::var_os("AGENTQ_JOB_ID").is_some(),
-            "run this inside the job queue (agentq run --label rccit-rel-build --mem 10 -- racit-release ...), or pass --no-queue-check");
+        ensure!(
+            std::env::var_os("AGENTQ_JOB_ID").is_some(),
+            "run this inside the job queue (agentq run --label rccit-rel-build --mem 10 -- racit-release ...), or pass --no-queue-check"
+        );
     }
-    let text = fs::read_to_string(&args.config).with_context(|| format!("config {}", args.config.display()))?;
-    let cfg: Config = toml::from_str(&text).with_context(|| format!("config {}", args.config.display()))?;
-    ensure!(!args.mac || cfg!(target_os = "macos"), "the macOS zip needs a Mac (use --only win elsewhere)");
-    let tree = cfg.tree.clone().unwrap_or_else(|| cfg.repo.join(".worktrees/release-build"));
+    let text = fs::read_to_string(&args.config)
+        .with_context(|| format!("config {}", args.config.display()))?;
+    let cfg: Config =
+        toml::from_str(&text).with_context(|| format!("config {}", args.config.display()))?;
+    ensure!(
+        !args.mac || cfg!(target_os = "macos"),
+        "the macOS zip needs a Mac (use --only win elsewhere)"
+    );
+    let tree = cfg
+        .tree
+        .clone()
+        .unwrap_or_else(|| cfg.repo.join(".worktrees/release-build"));
     let ver = args.tag[1..].to_string();
     // A --ref preflight gets its own folder, so it never replaces a release's zips.
     let out_dir = match &args.git_ref {
-        Some(r) => cfg.work.join(format!("{}-ref-{}", args.tag, r.replace('/', "-"))),
+        Some(r) => cfg
+            .work
+            .join(format!("{}-ref-{}", args.tag, r.replace('/', "-"))),
         None => cfg.work.join(&args.tag),
     };
     let mut c = Ctx {
-        logs: out_dir.join("logs"), bin: out_dir.join("bin"), dist: out_dir.join("dist"), out: out_dir,
-        cfg, args, ver, tree, report: String::new(), shippable: true, started: Instant::now(),
+        logs: out_dir.join("logs"),
+        bin: out_dir.join("bin"),
+        dist: out_dir.join("dist"),
+        out: out_dir,
+        cfg,
+        args,
+        ver,
+        tree,
+        report: String::new(),
+        shippable: true,
+        started: Instant::now(),
     };
     rm_rf(&c.bin)?;
-    for d in [&c.logs, &c.bin, &c.dist] { fs::create_dir_all(d)?; }
-    c.note(format!("RACiT {} build v{} ({})", c.ver, c.args.build,
-        out(&mut sh("date", &["+%Y-%m-%d %H:%M %z"])).unwrap_or_default()));
+    for d in [&c.logs, &c.bin, &c.dist] {
+        fs::create_dir_all(d)?;
+    }
+    c.note(format!(
+        "RACiT {} build v{} ({})",
+        c.ver,
+        c.args.build,
+        out(&mut sh("date", &["+%Y-%m-%d %H:%M %z"])).unwrap_or_default()
+    ));
     c.need_space("start")?;
-    if c.args.win { write_machost_toolchain(&c)?; }
-    let reference = if c.args.win { Some(reference_zip(&mut c)?) } else { None };
+    if c.args.win {
+        write_machost_toolchain(&c)?;
+    }
+    let reference = if c.args.win {
+        Some(reference_zip(&mut c)?)
+    } else {
+        None
+    };
     let commit = prepare_tree(&mut c)?;
     pipelines(&mut c)?;
     let mut assets = vec![];
-    if c.args.mac { assets.push(package_mac(&mut c)?); }
+    if c.args.mac {
+        assets.push(package_mac(&mut c)?);
+    }
     if c.args.win {
         build_windows(&mut c)?;
         build_windows_launcher(&mut c)?;
@@ -1023,31 +1796,58 @@ fn run() -> Result<()> {
     }
     if !c.args.keep_builds {
         // The Windows objects are ~1.5 GB per build; the lifts and Mac builds stay for the next run.
-        for d in ["game/build-win", "game/build-win-compat", "game/build-win-u120", "game/build-win-u120-compat", "build/BCES00511"] {
+        for d in [
+            "game/build-win",
+            "game/build-win-compat",
+            "game/build-win-u120",
+            "game/build-win-u120-compat",
+            "build/BCES00511",
+        ] {
             rm_rf(&c.tree.join(d))?;
         }
     }
     if c.args.smoke {
         for z in assets.clone() {
-            if z.to_string_lossy().ends_with("-macos.zip") { smoke_mac(&mut c, &z)?; } else { smoke_windows(&mut c, &z)?; }
+            if z.to_string_lossy().ends_with("-macos.zip") {
+                smoke_mac(&mut c, &z)?;
+            } else {
+                smoke_windows(&mut c, &z)?;
+            }
         }
     } else {
         c.shippable = false;
         c.note("- smoke tests: NOT RUN (--no-smoke)");
     }
     let mins = c.started.elapsed().as_secs() / 60;
-    c.note(format!("- total {mins} min; {}", if c.shippable { "all checks passed" } else { "NOT shippable as is (see above)" }));
+    c.note(format!(
+        "- total {mins} min; {}",
+        if c.shippable {
+            "all checks passed"
+        } else {
+            "NOT shippable as is (see above)"
+        }
+    ));
     fs::write(c.out.join("summary.md"), &c.report)?;
-    if c.args.upload { upload(&mut c, &commit, &assets)?; fs::write(c.out.join("summary.md"), &c.report)?; }
+    if c.args.upload {
+        upload(&mut c, &commit, &assets)?;
+        fs::write(c.out.join("summary.md"), &c.report)?;
+    }
     // The built programs are inside the zips now.
-    if !c.args.keep_builds { rm_rf(&c.bin)?; }
-    if let Some(r) = std::env::var_os("AGENTQ_RESULT") { let _ = fs::write(r, &c.report); }
+    if !c.args.keep_builds {
+        rm_rf(&c.bin)?;
+    }
+    if let Some(r) = std::env::var_os("AGENTQ_RESULT") {
+        let _ = fs::write(r, &c.report);
+    }
     println!("\nsummary: {}", c.out.join("summary.md").display());
     Ok(())
 }
 
 #[repr(C)]
-struct Rlimit { cur: u64, max: u64 }
+struct Rlimit {
+    cur: u64,
+    max: u64,
+}
 unsafe extern "C" {
     fn getrlimit(resource: i32, rlp: *mut Rlimit) -> i32;
     fn setrlimit(resource: i32, rlp: *const Rlimit) -> i32;
@@ -1059,10 +1859,17 @@ unsafe extern "C" {
 fn raise_open_files() {
     const RLIMIT_NOFILE: i32 = 8;
     let mut r = Rlimit { cur: 0, max: 0 };
-    if unsafe { getrlimit(RLIMIT_NOFILE, &mut r) } != 0 { return; }
+    if unsafe { getrlimit(RLIMIT_NOFILE, &mut r) } != 0 {
+        return;
+    }
     for want in [65536u64, 10240] {
-        let n = Rlimit { cur: want.min(r.max), max: r.max };
-        if n.cur <= r.cur || unsafe { setrlimit(RLIMIT_NOFILE, &n) } == 0 { return; }
+        let n = Rlimit {
+            cur: want.min(r.max),
+            max: r.max,
+        };
+        if n.cur <= r.cur || unsafe { setrlimit(RLIMIT_NOFILE, &n) } == 0 {
+            return;
+        }
     }
 }
 
