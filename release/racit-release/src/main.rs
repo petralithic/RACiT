@@ -269,17 +269,46 @@ impl Ctx {
         println!("\n== [{:>4} min] {what}", t / 60);
     }
     /// Runs a command with its output in logs/<log>.log; on failure, says where and shows the tail.
+    /// Each log line starts with the seconds since the step began, so a slow stage shows up.
     fn run(&self, log: &str, cmd: &mut Command) -> Result<()> {
         let path = self.logs.join(format!("{log}.log"));
-        let f = fs::File::create(&path)?;
+        let f = std::sync::Mutex::new(fs::File::create(&path)?);
         let desc = format!("{cmd:?}");
         let t = Instant::now();
-        let st = cmd
+        let mut child = cmd
             .stdin(Stdio::null())
-            .stdout(f.try_clone()?)
-            .stderr(f)
-            .status()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .with_context(|| format!("starting {desc}"))?;
+        let (so, se) = (
+            child.stdout.take().expect("piped"),
+            child.stderr.take().expect("piped"),
+        );
+        let copy = |r: &mut dyn Read| {
+            let mut r = std::io::BufReader::new(r);
+            let mut line = Vec::new();
+            while std::io::BufRead::read_until(&mut r, b'\n', &mut line)
+                .map(|n| n > 0)
+                .unwrap_or(false)
+            {
+                let mut w = f.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = write!(w, "[{:>5}] ", t.elapsed().as_secs());
+                let _ = w.write_all(&line);
+                if !line.ends_with(b"\n") {
+                    let _ = w.write_all(b"\n");
+                }
+                line.clear();
+            }
+        };
+        let copy = &copy;
+        let st = std::thread::scope(|s| {
+            let (mut so, mut se) = (so, se);
+            s.spawn(move || copy(&mut so));
+            s.spawn(move || copy(&mut se));
+            child.wait()
+        })
+        .with_context(|| format!("waiting for {desc}"))?;
         if !st.success() {
             let tail = fs::read_to_string(&path).unwrap_or_default();
             let tail: Vec<&str> = tail.lines().rev().take(25).collect();
@@ -676,49 +705,73 @@ fn write_machost_toolchain(c: &Ctx) -> Result<()> {
 // ------------------------------------------------------------- builds -------
 
 /// The lifts (and on a Mac build, the Mac games): scripts/pipeline.sh for 1.00 and 1.20.
+/// The two run at the same time, each with about half the jobs: they write separate trees
+/// (game/ and out/ for the disc, out/BCUS98124-1.20/ for the update), and much of each is
+/// single-threaded (loader, Python lifts, configure, link), so the other fills the idle cores.
 fn pipelines(c: &mut Ctx) -> Result<()> {
     let tree = c.tree.clone();
     let skip_desktop = !c.args.mac;
-    c.need_space("pipeline 1.00")?;
-    c.step("pipeline: BCUS98124 1.00");
-    let mut p = sh("bash", &["scripts/pipeline.sh"]);
-    p.current_dir(&tree)
-        .env("PY", c.py())
-        .env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
-        .env("CMAKE_GENERATOR", "Unix Makefiles");
-    if skip_desktop {
-        p.env("SKIP_DESKTOP", "1");
-    }
     let min = if c.args.mac { Some(mac_min(c)?) } else { None };
-    if let Some(m) = &min {
-        p.env("MACOSX_DEPLOYMENT_TARGET", m);
+    let u120 = c.cfg.inputs.us120_elf.clone();
+    let jobs = if u120.is_some() {
+        c.cfg.jobs.div_ceil(2) + 1
+    } else {
+        c.cfg.jobs
     }
-    c.run("pipeline-100", &mut p)?;
-    if c.args.mac {
-        put(
-            &tree.join("game/build/RaCACiTRecomp"),
-            &c.bin.join("mac-100/RaCACiTRecomp"),
-        )?;
-    }
-
-    if let Some(u120) = c.cfg.inputs.us120_elf.clone() {
-        c.need_space("pipeline 1.20")?;
-        c.step("pipeline: BCUS98124 update 1.20");
+    .min(c.cfg.jobs);
+    c.need_space(if u120.is_some() {
+        "pipelines 1.00 and 1.20"
+    } else {
+        "pipeline 1.00"
+    })?;
+    c.step(if u120.is_some() {
+        "pipelines: BCUS98124 1.00 and update 1.20, side by side"
+    } else {
+        "pipeline: BCUS98124 1.00"
+    });
+    let py = c.py();
+    let pipeline = |elf: Option<&Path>| {
         let mut p = sh("bash", &["scripts/pipeline.sh"]);
-        p.arg(&u120)
-            .current_dir(&tree)
-            .env("PY", c.py())
-            .env("CMAKE_BUILD_PARALLEL_LEVEL", c.cfg.jobs.to_string())
-            .env("CMAKE_GENERATOR", "Unix Makefiles")
-            .env("LIBSRE", tree.join("input/libsre.prx"));
+        if let Some(e) = elf {
+            p.arg(e).env("LIBSRE", tree.join("input/libsre.prx"));
+        }
+        p.current_dir(&tree)
+            .env("PY", &py)
+            .env("CMAKE_BUILD_PARALLEL_LEVEL", jobs.to_string())
+            .env("CMAKE_GENERATOR", "Unix Makefiles");
         if skip_desktop {
             p.env("SKIP_DESKTOP", "1");
         }
         if let Some(m) = &min {
             p.env("MACOSX_DEPLOYMENT_TARGET", m);
         }
-        c.run("pipeline-120", &mut p)?;
-        if c.args.mac {
+        p
+    };
+    let (mut p100, mut p120) = (pipeline(None), u120.as_deref().map(|e| pipeline(Some(e))));
+    let ctx: &Ctx = c;
+    let (r100, r120) = std::thread::scope(|s| {
+        let h = p120
+            .as_mut()
+            .map(|p| s.spawn(move || ctx.run("pipeline-120", p)));
+        let r100 = ctx.run("pipeline-100", &mut p100);
+        (
+            r100,
+            h.map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(anyhow!("pipeline-120 panicked")))
+            }),
+        )
+    });
+    r100?;
+    if let Some(r) = r120 {
+        r?;
+    }
+    if c.args.mac {
+        put(
+            &tree.join("game/build/RaCACiTRecomp"),
+            &c.bin.join("mac-100/RaCACiTRecomp"),
+        )?;
+        if u120.is_some() {
             put(
                 &tree.join("out/BCUS98124-1.20/build/RaCACiTRecomp"),
                 &c.bin.join("mac-120/RaCACiTRecomp"),
@@ -1026,10 +1079,10 @@ fn build_windows_launcher(c: &mut Ctx) -> Result<()> {
 fn reference_zip(c: &mut Ctx) -> Result<PathBuf> {
     let refdir = c.cfg.work.join("ref");
     fs::create_dir_all(&refdir)?;
-    if let Some(f) = &c.args.carry_from {
-        if f.ends_with(".zip") {
-            return Ok(PathBuf::from(f));
-        }
+    if let Some(f) = &c.args.carry_from
+        && f.ends_with(".zip")
+    {
+        return Ok(PathBuf::from(f));
     }
     let tag = match &c.args.carry_from {
         Some(t) => t.clone(),
@@ -1124,10 +1177,10 @@ fn shape(names: &[String]) -> BTreeSet<String> {
         .filter(|n| !n.ends_with('/'))
         .map(|n| {
             let mut parts: Vec<String> = n.split('/').map(String::from).collect();
-            if let Some(top) = parts.first_mut() {
-                if top.starts_with("RACiT_") {
-                    *top = "RACiT_*".into();
-                }
+            if let Some(top) = parts.first_mut()
+                && top.starts_with("RACiT_")
+            {
+                *top = "RACiT_*".into();
             }
             for i in 1..parts.len() {
                 if parts[i - 1] == "builds" {
